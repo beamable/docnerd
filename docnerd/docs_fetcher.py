@@ -54,6 +54,33 @@ def _list_md_files(repo: Repository, path: str, ref: str) -> list[str]:
     return files
 
 
+def _prioritize_md_paths(
+    paths: list[str],
+    prioritize_terms: list[str] | None,
+    max_files: int,
+) -> list[str]:
+    """
+    Rank paths so PR-relevant docs (e.g. cli/, deploy) are kept when max_files caps the set.
+
+    Plain alphabetical order often drops entire subtrees (e.g. docs/cli/...) when the repo
+    has many markdown files earlier in the sort.
+    """
+    if not paths or max_files <= 0:
+        return []
+    if not prioritize_terms:
+        return sorted(paths)[:max_files]
+
+    tlow = [t.lower() for t in prioritize_terms if len(t) >= 2]
+    scored: list[tuple[int, str]] = []
+    for p in paths:
+        pl = p.lower()
+        score = sum(1 for t in tlow if t in pl)
+        scored.append((-score, p))
+    scored.sort()
+    ordered = [p for _, p in scored]
+    return ordered[:max_files]
+
+
 def _get_file_content(repo: Repository, path: str, ref: str) -> str:
     """Get file content as string."""
     try:
@@ -70,9 +97,15 @@ def fetch_existing_docs(
     ref: str,
     max_files: int = 50,
     max_content_per_file: int = 8000,
+    prioritize_terms: list[str] | None = None,
 ) -> tuple[dict[str, str], str]:
     """
     Fetch existing docs from the target repo.
+
+    Args:
+        prioritize_terms: Substrings (e.g. from the source PR) used to rank which .md files
+            to load when max_files is lower than the total count. Avoids keeping only the first
+            files alphabetically and missing cli/deploy guides.
 
     Returns:
         (dict of path -> content, nav_structure_text)
@@ -82,7 +115,7 @@ def fetch_existing_docs(
     nav_text = get_nav_structure(config)
 
     md_files = _list_md_files(repo, docs_dir, ref)
-    md_files = sorted(md_files)[:max_files]
+    md_files = _prioritize_md_paths(md_files, prioritize_terms, max_files)
 
     docs: dict[str, str] = {}
     for path in md_files:

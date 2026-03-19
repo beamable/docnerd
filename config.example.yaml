@@ -30,7 +30,8 @@ branch_prefix: docnerd
 
 # Docs fetcher (when loading existing docs from target repo)
 docs_fetcher:
-  max_files: 50
+  # Paths are ranked by PR search terms before capping (not raw A–Z) so cli/deploy docs load
+  max_files: 80
   max_content_per_file: 8000
 
 # Doc generation behavior

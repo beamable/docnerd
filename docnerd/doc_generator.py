@@ -109,6 +109,27 @@ def ensure_matching_docs(
     return sorted(set(hits))[:limit]
 
 
+def ensure_matching_docs_not_empty_for_user_facing_pr(
+    matching_docs: list[str],
+    search_terms: list[str],
+    existing_paths: set[str],
+    *,
+    limit: int = 20,
+) -> list[str]:
+    """
+    If the PR is user-facing but no path matched, still target some loaded docs so the
+    writer is not told to update an empty list (which invites "no edits").
+    """
+    if matching_docs:
+        return matching_docs
+    st = {t.lower() for t in search_terms}
+    if not st & _USER_FACING_DOC_SIGNALS:
+        return matching_docs
+    if not existing_paths:
+        return matching_docs
+    return sorted(existing_paths)[:limit]
+
+
 def build_system_prompt(
     rules_text: str,
     target_branch: str,
@@ -299,14 +320,20 @@ def parse_docnerd_response(
     Marks as is_new=False for paths that existed.
     """
     edits: list[DocEdit] = []
-    pattern = re.compile(r"```docnerd:([^\n]+)\n(.*?)```", re.DOTALL)
-
-    for match in pattern.finditer(response_text):
-        path = match.group(1).strip()
-        content = match.group(2).strip()
-        if path and content:
-            is_new = path not in existing_paths
-            edits.append(DocEdit(path=path, content=content, is_new=is_new))
+    # Allow optional whitespace after docnerd: and before newline (models vary)
+    patterns = [
+        re.compile(r"```docnerd:\s*([^\n\r]+?)\s*\r?\n(.*?)```", re.DOTALL),
+        re.compile(r"```\s*docnerd:\s*([^\n\r]+?)\s*\r?\n(.*?)```", re.DOTALL),
+    ]
+    seen_paths: set[str] = set()
+    for pattern in patterns:
+        for match in pattern.finditer(response_text):
+            path = match.group(1).strip()
+            content = match.group(2).strip()
+            if path and content and path not in seen_paths:
+                seen_paths.add(path)
+                is_new = path not in existing_paths
+                edits.append(DocEdit(path=path, content=content, is_new=is_new))
 
     return edits
 
@@ -354,6 +381,11 @@ class DocGenerator:
             compute_matching_docs(list(existing_paths), search_terms),
             search_terms,
         )
+        matching_docs = ensure_matching_docs_not_empty_for_user_facing_pr(
+            matching_docs, search_terms, existing_paths
+        )
+        if matching_docs:
+            logger.info("Matching docs for writer: %s", matching_docs[:12])
 
         system_prompt = build_system_prompt(
             self.rules_text,

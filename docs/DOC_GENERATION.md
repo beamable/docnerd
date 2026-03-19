@@ -4,7 +4,7 @@ docNerd is designed to **integrate with existing docs** rather than create new f
 
 ## Default Behavior
 
-1. **Fetch existing docs** — docNerd loads all `.md` files from your docs repo (from `mkdocs.yml`'s `docs_dir`, default `docs/`).
+1. **Fetch existing docs** — docNerd lists all `.md` files under `docs_dir`, then **ranks them by the source PR’s search terms** (deploy, cli, docker, …) before applying `max_files`. That avoids the old behavior of keeping only the first paths **alphabetically**, which often excluded entire subtrees like `docs/cli/`.
 
 2. **Check for invalidation** — It analyzes the PR to find docs that are now wrong (API changes, config changes, deprecations, etc.).
 

@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from docnerd.analyzer import analyze_pr
+from docnerd.analyzer import analyze_pr, extract_doc_search_terms
 from docnerd.branch_validator import validate_branch
 from docnerd.comment_parser import mentions_docnerd, parse_trigger
 from docnerd.config import load_config
@@ -149,13 +149,15 @@ def run(
         if action_path:
             rules_full = Path(action_path) / rules_path
 
-    # Fetch existing docs from target repo (required for integration)
+    # Fetch existing docs from target repo (rank by PR terms so cli/deploy docs aren't dropped)
+    search_terms_for_fetch = extract_doc_search_terms(pr_context)
     try:
         existing_docs, nav_structure = fetch_existing_docs(
             target_repo,
             ref=target_branch,
-            max_files=config.get("docs_fetcher", {}).get("max_files", 50),
+            max_files=config.get("docs_fetcher", {}).get("max_files", 80),
             max_content_per_file=config.get("docs_fetcher", {}).get("max_content_per_file", 8000),
+            prioritize_terms=search_terms_for_fetch,
         )
     except Exception as e:
         logger.warning("Could not fetch existing docs: %s. Proceeding without.", e)
@@ -164,6 +166,12 @@ def run(
 
     if not existing_docs:
         logger.warning("No existing docs found in target repo. Doc generation may create new files.")
+    else:
+        logger.info(
+            "Loaded %d doc file(s) for generation (prioritize_terms count=%d)",
+            len(existing_docs),
+            len(search_terms_for_fetch),
+        )
 
     try:
         generator = DocGenerator(
