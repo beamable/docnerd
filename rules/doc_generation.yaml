@@ -1,0 +1,30 @@
+# docNerd doc generation behavior - controls when to create vs edit
+# These rules are passed to Claude to guide documentation updates
+
+# Priority order for doc updates (strict - follow this order)
+priority:
+  1: "Fix invalidated docs - if the PR changes/removes something that makes existing docs wrong, update those docs"
+  2: "Add context to existing docs - if the PR adds info that belongs in an existing page, add it there"
+  3: "Create new files - ONLY when the PR introduces a major new feature/topic with no existing doc to add to"
+
+# When to create new files (very restrictive)
+create_new_files:
+  allowed: false  # Default: do not create new files
+  exceptions:
+    - "PR introduces a major new API, feature, or concept with no existing doc"
+    - "PR adds a new top-level section that warrants its own page"
+  require_justification: true  # Must explain why a new file is needed
+
+# Invalidation detection - what PR changes should trigger doc updates
+invalidation_triggers:
+  - "API signature changes (params, return values, removal)"
+  - "Config option changes (new, removed, renamed)"
+  - "Behavior changes that affect how users use the feature"
+  - "Deprecations or removals"
+  - "New required steps or changed workflows"
+
+# Integration with existing docs
+integration:
+  preserve_existing_structure: true
+  match_existing_style: true
+  add_to_existing_sections: true  # Prefer adding to existing sections over creating new ones

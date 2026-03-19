@@ -27,3 +27,12 @@ trigger_phrase: "@docNerd, doc for"
 
 # Branch naming for docNerd's working branches
 branch_prefix: docnerd
+
+# Docs fetcher (when loading existing docs from target repo)
+docs_fetcher:
+  max_files: 50
+  max_content_per_file: 8000
+
+# Doc generation behavior
+# allow_new_files: false = only edit existing docs, never create new files
+allow_new_files: false

@@ -20,6 +20,9 @@ inputs:
   anthropic-api-key:
     description: Anthropic API key for Claude
     required: true
+  bot-token:
+    description: PAT from a "docNerd" GitHub account so comments appear as docNerd instead of github-actions
+    required: false
 
 runs:
   using: composite
@@ -44,5 +47,6 @@ runs:
         TARGET_REPO_NAME: ${{ inputs.target-name }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         TARGET_REPO_TOKEN: ${{ inputs.target-repo-token }}
+        DOCNERD_BOT_TOKEN: ${{ inputs.bot-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
       run: python -m docnerd.main

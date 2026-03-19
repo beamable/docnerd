@@ -12,6 +12,7 @@ def test_import_all_modules():
     from docnerd.branch_validator import validate_branch
     from docnerd.comment_parser import parse_trigger, TriggerMatch
     from docnerd.doc_generator import DocGenerator, DocEdit, parse_docnerd_response
+    from docnerd.docs_fetcher import fetch_existing_docs, get_mkdocs_config
     from docnerd.github_client import (
         get_github_client,
         get_repo,

@@ -1,5 +1,6 @@
 """Generate and edit documentation using Claude."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,63 +20,104 @@ class DocEdit:
     is_new: bool
 
 
-def build_system_prompt(rules_text: str, target_branch: str) -> str:
-    """Build the system prompt for Claude with rules and context."""
-    return f"""You are a technical documentation writer. You generate and edit Markdown documentation for an MkDocs site.
+def build_system_prompt(
+    rules_text: str,
+    target_branch: str,
+    nav_structure: str,
+    existing_doc_paths: list[str],
+) -> str:
+    """Build the system prompt with strict doc generation rules."""
+    paths_list = "\n".join(f"- {p}" for p in existing_doc_paths[:80])
+    return f"""You are a technical documentation maintainer for an MkDocs site. Your job is to integrate PR changes into EXISTING documentation. You must NOT create random new files.
 
-Target documentation branch: {target_branch}
+Target branch: {target_branch}
+
+## MkDocs nav structure (these are the existing docs)
+```
+{nav_structure}
+```
+
+## Existing doc files (work within these - do NOT create new files unless strictly necessary)
+{paths_list}
+
+## CRITICAL RULES - follow this order
+
+1. **INVALIDATION FIRST**: Does the PR change/remove something that makes existing docs wrong?
+   - API changes, config changes, behavior changes, deprecations
+   - If yes: EDIT the affected existing doc(s). Fix the incorrect info. Preserve the rest.
+
+2. **ADD CONTEXT**: Does the PR add information that belongs in an existing doc?
+   - New options, examples, caveats, migration notes
+   - If yes: ADD to the relevant existing doc. Find the right section. Don't create new files.
+
+3. **NEW FILES - RARELY**: Only create a new file if:
+   - The PR introduces a major new feature/concept with NO existing doc to add to
+   - You have explicit justification
+   - Default: DO NOT create new files. When in doubt, add to existing docs or make no changes.
+
+## Output format
+For each file you edit, output:
+```docnerd:path/to/existing/file.md
+<full file content with your edits>
+```
+
+- Use EXACT paths from the existing doc list above
+- Output the COMPLETE file content (preserve unchanged parts)
+- If no doc changes are needed, output nothing (no docnerd blocks)
+- Do NOT create files like docs/new-feature.md unless the PR truly warrants a new top-level page
 
 {rules_text}
-
-When generating docs:
-- Create new .md files or edit existing ones as needed to reflect the source code changes
-- Use proper Markdown formatting
-- Include a note linking back to the source PR when relevant
-- For new pages, place them in an appropriate docs/ directory structure
-- Preserve existing content when editing; only change what needs to change to reflect the PR
 """
 
 
-def build_user_prompt(pr_context_text: str, existing_docs: dict[str, str] | None = None) -> str:
-    """Build the user prompt with PR context and optional existing docs."""
+def build_user_prompt(
+    pr_context_text: str,
+    existing_docs: dict[str, str],
+) -> str:
+    """Build the user prompt with PR context and existing docs."""
     parts = [
-        "Analyze this pull request and produce documentation changes (new or edited Markdown files).",
+        "## Your task",
+        "",
+        "1. Read the PR below.",
+        "2. Identify which EXISTING docs (if any) are INVALIDATED by these changes.",
+        "3. Identify what NEW CONTEXT should be added to EXISTING docs.",
+        "4. Only if the PR introduces a major new feature with no existing doc: consider a new file.",
+        "",
+        "Output ONLY edits to existing files, or additions to existing files. Prefer editing over creating.",
+        "",
+        "---",
         "",
         pr_context_text,
+        "",
+        "---",
+        "",
+        "## Existing documentation (reference when editing - use these exact paths)",
+        "",
     ]
 
-    if existing_docs:
+    for path, content in existing_docs.items():
+        parts.append(f"### {path}")
+        parts.append("```markdown")
+        parts.append(content)
+        parts.append("```")
         parts.append("")
-        parts.append("## Existing documentation (for reference when editing)")
-        for path, content in existing_docs.items():
-            parts.append(f"\n### {path}")
-            parts.append("```markdown")
-            parts.append(content[:4000] + ("..." if len(content) > 4000 else ""))
-            parts.append("```")
 
-    parts.append("")
     parts.append(
-        "Respond with your documentation changes. For each file, use this format:\n"
-        "```docnerd:path/to/file.md\n"
-        "<file content>\n"
-        "```\n"
-        "You can output multiple files. Use relative paths like docs/guide/feature.md."
+        "Respond with docnerd blocks ONLY for files you are editing. "
+        "Use the exact path from the list above. Include the full file content with your changes."
     )
 
     return "\n".join(parts)
 
 
-def parse_docnerd_response(response_text: str) -> list[DocEdit]:
+def parse_docnerd_response(
+    response_text: str,
+    existing_paths: set[str],
+) -> list[DocEdit]:
     """
     Parse Claude's response to extract file edits.
-
-    Expected format:
-    ```docnerd:path/to/file.md
-    content here
-    ```
+    Marks as is_new=False for paths that existed.
     """
-    import re
-
     edits: list[DocEdit] = []
     pattern = re.compile(r"```docnerd:([^\n]+)\n(.*?)```", re.DOTALL)
 
@@ -83,7 +125,8 @@ def parse_docnerd_response(response_text: str) -> list[DocEdit]:
         path = match.group(1).strip()
         content = match.group(2).strip()
         if path and content:
-            edits.append(DocEdit(path=path, content=content, is_new=True))
+            is_new = path not in existing_paths
+            edits.append(DocEdit(path=path, content=content, is_new=is_new))
 
     return edits
 
@@ -107,7 +150,8 @@ class DocGenerator:
         self,
         pr_context: PRContext,
         target_branch: str,
-        existing_docs: dict[str, str] | None = None,
+        existing_docs: dict[str, str],
+        nav_structure: str = "(no nav)",
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -115,12 +159,19 @@ class DocGenerator:
         Args:
             pr_context: Analyzed PR context
             target_branch: Target docs branch (e.g. core/v7.1)
-            existing_docs: Optional dict of path -> content for existing docs to edit
+            existing_docs: Dict of path -> content for existing docs (required)
+            nav_structure: MkDocs nav structure text
 
         Returns:
             List of DocEdit (path, content, is_new)
         """
-        system_prompt = build_system_prompt(self.rules_text, target_branch)
+        existing_paths = set(existing_docs.keys())
+        system_prompt = build_system_prompt(
+            self.rules_text,
+            target_branch,
+            nav_structure,
+            list(existing_paths),
+        )
         pr_text = format_pr_context_for_prompt(pr_context)
         user_prompt = build_user_prompt(pr_text, existing_docs)
 
@@ -136,4 +187,4 @@ class DocGenerator:
             if hasattr(block, "text"):
                 text += block.text
 
-        return parse_docnerd_response(text)
+        return parse_docnerd_response(text, existing_paths)

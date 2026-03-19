@@ -29,10 +29,15 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     config.setdefault("target_repo", {})
     config.setdefault("llm", {})
 
-    if os.getenv("GITHUB_TOKEN"):
-        config["source_repo"]["token"] = os.getenv("GITHUB_TOKEN")
-    if os.getenv("SOURCE_REPO_TOKEN"):
-        config["source_repo"]["token"] = os.getenv("SOURCE_REPO_TOKEN")
+    # Source token: bot token preferred (comments show as docNerd), else GITHUB_TOKEN
+    source_token = (
+        os.getenv("DOCNERD_BOT_TOKEN")
+        or os.getenv("BOT_TOKEN")
+        or os.getenv("SOURCE_REPO_TOKEN")
+        or os.getenv("GITHUB_TOKEN")
+    )
+    if source_token:
+        config["source_repo"]["token"] = source_token
     if os.getenv("TARGET_REPO_TOKEN"):
         config["target_repo"]["token"] = os.getenv("TARGET_REPO_TOKEN")
     if os.getenv("ANTHROPIC_API_KEY"):

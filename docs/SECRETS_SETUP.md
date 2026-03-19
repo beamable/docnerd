@@ -11,10 +11,10 @@ This guide walks you through obtaining and configuring every secret and variable
 | `DOCNERD_TARGET_OWNER` | Yes | Your docs repo owner (org or username) |
 | `DOCNERD_TARGET_NAME` | Yes | Your docs repo name |
 | `GITHUB_TOKEN` | Yes | Auto-provided by GitHub (no setup) |
-| `DOCNERD_TARGET_REPO_TOKEN` | No* | Create a Personal Access Token (PAT) |
+| `DOCNERD_TARGET_REPO_TOKEN` | **Yes** | Create a Personal Access Token (PAT) with write access to docs repo |
 | `ANTHROPIC_API_KEY` | Yes | Create at console.anthropic.com |
 
-\* Only needed if your docs repo is in a different org or requires different permissions than the source repo.
+**Important:** `GITHUB_TOKEN` only has access to the repo where the workflow runs (your source repo). It cannot create branches or PRs in a different repo (your docs repo). You **must** create `DOCNERD_TARGET_REPO_TOKEN` for docNerd to write to the docs repo.
 
 ---
 
@@ -87,20 +87,9 @@ docNerd uses Claude to generate documentation. You need an API key from Anthropi
 
 ---
 
-## Step 4: (Optional) Create a Token for the Docs Repo
+## Step 4: Create a Token for the Docs Repo (Required)
 
-You only need `DOCNERD_TARGET_REPO_TOKEN` if:
-
-- The docs repo is in a **different organization** than the source repo.
-- The docs repo requires **different permissions** than the default `GITHUB_TOKEN`.
-- You hit **rate limits** or permission errors with the default token.
-
-### When you can skip this
-
-- Source and docs repos are in the **same org**.
-- The default `GITHUB_TOKEN` has write access to the docs repo.
-
-In that case, leave `DOCNERD_TARGET_REPO_TOKEN` unset. docNerd will use `GITHUB_TOKEN` for both repos.
+`DOCNERD_TARGET_REPO_TOKEN` is **required**. The default `GITHUB_TOKEN` only has access to the repo where the workflow runs (your source repo). It cannot create branches or PRs in your docs repo, which is a different repository.
 
 ### Create a Personal Access Token (PAT)
 
@@ -147,7 +136,23 @@ For org-wide use:
 
 ---
 
-## Step 5: Verify Your Workflow Configuration
+## Step 5: (Optional) Use docNerd as Comment Author
+
+All comments include **"I am docNerd."** at the start, so you can identify them without a separate bot account.
+
+By default, comments are posted by **github-actions**. To have them appear under a **docNerd** account instead:
+
+1. Create a GitHub account named `docNerd` (or `docNerd-bot` if taken).
+2. Add it as a collaborator to both your source repo and docs repo (Write or Admin).
+3. Create a PAT for that account (Settings → Developer settings → Personal access tokens) with `repo` scope.
+4. Add secret `DOCNERD_BOT_TOKEN` in your source repo with that PAT.
+5. Pass it to the action: `bot-token: ${{ secrets.DOCNERD_BOT_TOKEN }}`
+
+**Tip:** You can use the same docNerd account PAT for both `bot-token` and `target-repo-token` if the account has access to both repos.
+
+---
+
+## Step 6: Verify Your Workflow Configuration
 
 Your workflow should pass the secrets to the action:
 
@@ -159,10 +164,12 @@ Your workflow should pass the secrets to the action:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     target-repo-token: ${{ secrets.DOCNERD_TARGET_REPO_TOKEN }}
     anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    bot-token: ${{ secrets.DOCNERD_BOT_TOKEN }}   # Optional: comments appear as docNerd
 ```
 
 **Notes:**
 
+- `bot-token` is optional. When omitted, comments appear as github-actions.
 - If you did **not** create `DOCNERD_TARGET_REPO_TOKEN`, you can either:
   - Omit the `target-repo-token` input, or
   - Pass an empty string: `target-repo-token: ''`
@@ -172,10 +179,19 @@ Your workflow should pass the secrets to the action:
 
 ## Troubleshooting
 
-### "Resource not accessible by integration"
+### "Resource not accessible by integration" (403 when creating branch/PR)
 
-- The token lacks permission to the docs repo.
-- Fix: Create `DOCNERD_TARGET_REPO_TOKEN` with `repo` (classic) or Contents + Pull requests (fine-grained) for the docs repo.
+- **Cause:** `GITHUB_TOKEN` only has access to the source repo. It cannot write to the docs repo.
+- **Fix:** Create `DOCNERD_TARGET_REPO_TOKEN` (a PAT with write access to the docs repo) and pass it to the action:
+  ```yaml
+  - uses: beamable/docnerd@v1
+    with:
+      target-owner: ${{ secrets.DOCNERD_TARGET_OWNER }}
+      target-name: ${{ secrets.DOCNERD_TARGET_NAME }}
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      target-repo-token: ${{ secrets.DOCNERD_TARGET_REPO_TOKEN }}   # Required!
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  ```
 
 ### "I couldn't find that branch"
 

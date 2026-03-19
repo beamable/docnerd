@@ -10,6 +10,7 @@ from docnerd.branch_validator import validate_branch
 from docnerd.comment_parser import parse_trigger
 from docnerd.config import load_config
 from docnerd.doc_generator import DocGenerator
+from docnerd.docs_fetcher import fetch_existing_docs
 from docnerd.github_client import get_github_client, get_pr, get_repo, post_comment
 from docnerd.pr_creator import create_docs_pr, find_existing_docs_pr
 
@@ -18,6 +19,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("docnerd")
+
+DOCNERD_PREFIX = "I am docNerd. "
+
+
+def _comment(pr, msg: str) -> None:
+    """Post a comment with docNerd identification."""
+    post_comment(pr, DOCNERD_PREFIX + msg)
 
 
 def run(
@@ -68,7 +76,7 @@ def run(
     target_name = config.get("target_repo", {}).get("name")
     if not target_owner or not target_name:
         logger.error("Target repo not configured (target_repo.owner, target_repo.name)")
-        post_comment(pr, "I couldn't complete the request: target docs repository is not configured.")
+        _comment(pr, "I couldn't complete the request: target docs repository is not configured.")
         return 1
 
     target_repo = get_repo(gh, target_owner, target_name) if target_token == source_token else get_repo(
@@ -78,18 +86,18 @@ def run(
     # Validate branch exists
     if not validate_branch(target_repo, target_branch):
         logger.warning("Branch %s not found in docs repo", target_branch)
-        post_comment(pr, "I couldn't find that branch.")
+        _comment(pr, "I couldn't find that branch.")
         return 0
 
     # Reply "working on it"
-    post_comment(pr, "yes, working on it")
+    _comment(pr, "yes, working on it")
 
     # Check for existing PR (idempotency)
     branch_prefix = config.get("branch_prefix", "docnerd")
     existing_pr_url = find_existing_docs_pr(target_repo, pr_number, target_branch, branch_prefix)
     if existing_pr_url:
         logger.info("Found existing docs PR: %s", existing_pr_url)
-        post_comment(pr, f"Here is the link to the Doc changes: {existing_pr_url}")
+        _comment(pr, f"Here is the link to the Doc changes: {existing_pr_url}")
         return 0
 
     # Analyze PR
@@ -100,7 +108,7 @@ def run(
     api_key = llm_config.get("api_key")
     if not api_key:
         logger.error("No Anthropic API key configured")
-        post_comment(pr, "I ran into an error generating docs: LLM API key is not configured.")
+        _comment(pr, "I ran into an error generating docs: LLM API key is not configured.")
         return 1
 
     # Generate docs - resolve rules_path from workspace (source repo), fallback to action's rules
@@ -112,6 +120,22 @@ def run(
         if action_path:
             rules_full = Path(action_path) / rules_path
 
+    # Fetch existing docs from target repo (required for integration)
+    try:
+        existing_docs, nav_structure = fetch_existing_docs(
+            target_repo,
+            ref=target_branch,
+            max_files=config.get("docs_fetcher", {}).get("max_files", 50),
+            max_content_per_file=config.get("docs_fetcher", {}).get("max_content_per_file", 8000),
+        )
+    except Exception as e:
+        logger.warning("Could not fetch existing docs: %s. Proceeding without.", e)
+        existing_docs = {}
+        nav_structure = "(could not fetch)"
+
+    if not existing_docs:
+        logger.warning("No existing docs found in target repo. Doc generation may create new files.")
+
     try:
         generator = DocGenerator(
             api_key=api_key,
@@ -119,15 +143,28 @@ def run(
             base_url=llm_config.get("base_url"),
             rules_path=rules_full,
         )
-        edits = generator.generate(pr_context, target_branch, existing_docs=None)
+        edits = generator.generate(
+            pr_context,
+            target_branch,
+            existing_docs=existing_docs,
+            nav_structure=nav_structure,
+        )
     except Exception as e:
         logger.exception("Doc generation failed")
-        post_comment(pr, f"I ran into an error generating docs: {e!s}")
+        _comment(pr, f"I ran into an error generating docs: {e!s}")
         return 1
 
     if not edits:
-        post_comment(pr, "I couldn't determine what documentation changes were needed for this PR.")
+        _comment(pr, "I reviewed the PR but didn't find documentation changes that needed to be made.")
         return 0
+
+    # Optionally filter out new files (config: allow_new_files: false)
+    allow_new = config.get("allow_new_files", True)
+    if not allow_new:
+        edits = [e for e in edits if not e.is_new]
+        if not edits:
+            _comment(pr, "I found potential doc updates but they would require new files. With allow_new_files disabled, no changes were made.")
+            return 0
 
     # Create docs PR
     try:
@@ -143,10 +180,10 @@ def run(
         )
     except Exception as e:
         logger.exception("Failed to create docs PR")
-        post_comment(pr, f"I ran into an error creating the docs PR: {e!s}")
+        _comment(pr, f"I ran into an error creating the docs PR: {e!s}")
         return 1
 
-    post_comment(pr, f"Here is the link to the Doc changes: {docs_pr_url}")
+    _comment(pr, f"Here is the link to the Doc changes: {docs_pr_url}")
     logger.info("Done. Docs PR: %s", docs_pr_url)
     return 0
 

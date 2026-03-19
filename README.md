@@ -38,6 +38,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           target-repo-token: ${{ secrets.DOCNERD_TARGET_REPO_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          bot-token: ${{ secrets.DOCNERD_BOT_TOKEN }}   # Optional: comments appear as docNerd account (otherwise github-actions; all say "I am docNerd")
 ```
 
 Replace `beamable/docnerd` with your repo path if different.
@@ -51,8 +52,9 @@ In your source repo: **Settings → Secrets and variables → Actions**
 | `DOCNERD_TARGET_OWNER` | Yes | Docs repo owner (e.g. `your-org`) |
 | `DOCNERD_TARGET_NAME` | Yes | Docs repo name (e.g. `your-docs-repo`) |
 | `GITHUB_TOKEN` | Yes | Auto-provided; pass to action for API access |
-| `DOCNERD_TARGET_REPO_TOKEN` | No | Token for docs repo if different from `GITHUB_TOKEN` |
+| `DOCNERD_TARGET_REPO_TOKEN` | **Yes** | PAT with write access to docs repo (GITHUB_TOKEN cannot write to other repos) |
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key for Claude |
+| `DOCNERD_BOT_TOKEN` | No | PAT from a "docNerd" account so comments appear as docNerd (otherwise shows github-actions; all comments include "I am docNerd") |
 
 **→ See [docs/SECRETS_SETUP.md](docs/SECRETS_SETUP.md) for detailed instructions on obtaining and configuring each secret.**
 
@@ -60,10 +62,10 @@ In your source repo: **Settings → Secrets and variables → Actions**
 
 Add to your source repo root:
 
-- **`config.yaml`** — Override defaults (target repo, rules path, trigger phrase, etc.)
-- **`rules/`** — YAML files for documentation style, structure, and terminology
+- **`config.yaml`** — Override defaults. Set `allow_new_files: false` to only edit existing docs.
+- **`rules/`** — YAML files for doc style and generation behavior. See `rules/doc_generation.yaml` to control when docNerd creates vs edits.
 
-If omitted, docNerd uses built-in defaults. See `config.example.yaml` and `rules/` in this repo.
+**→ See [docs/DOC_GENERATION.md](docs/DOC_GENERATION.md) for controlling doc output (invalidation, edits vs new files).**
 
 ## Usage
 
