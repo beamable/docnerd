@@ -7,7 +7,7 @@ from typing import Any
 
 from anthropic import Anthropic
 
-from docnerd.analyzer import PRContext, format_pr_context_for_prompt
+from docnerd.analyzer import PRContext, extract_doc_search_terms, format_pr_context_for_prompt
 from docnerd.rules_engine import format_rules_for_prompt, load_rules
 
 
@@ -25,36 +25,42 @@ def build_system_prompt(
     target_branch: str,
     nav_structure: str,
     existing_doc_paths: list[str],
+    search_terms: list[str],
 ) -> str:
     """Build the system prompt with strict doc generation rules."""
     paths_list = "\n".join(f"- {p}" for p in existing_doc_paths[:80])
-    return f"""You are a technical documentation maintainer for an MkDocs site. Your job is to integrate PR changes into EXISTING documentation. You must NOT create random new files.
+    terms_str = ", ".join(search_terms) if search_terms else "(none extracted)"
+    return f"""You are a technical documentation maintainer for an MkDocs site. Your job is to integrate PR changes into EXISTING documentation.
 
 Target branch: {target_branch}
 
-## MkDocs nav structure (these are the existing docs)
+## MkDocs nav structure
 ```
 {nav_structure}
 ```
 
-## Existing doc files (work within these - do NOT create new files unless strictly necessary)
+## Existing doc files (use EXACT paths from this list)
 {paths_list}
 
-## CRITICAL RULES - follow this order
+## DOC DISCOVERY - you MUST do this first
 
-1. **INVALIDATION FIRST**: Does the PR change/remove something that makes existing docs wrong?
-   - API changes, CLI/command changes (new flags like --max-parallel-count), config changes, behavior changes, deprecations
-   - If yes: EDIT the affected existing doc(s). Fix the incorrect info. Preserve the rest.
+Search terms extracted from the PR (use these to find relevant docs): {terms_str}
 
-2. **ADD CONTEXT**: Does the PR add information that belongs in an existing doc?
-   - New CLI flags/options, new API params, examples, caveats, migration notes
-   - CLI changes (e.g. beam deploy plan, beam build) ALWAYS need doc updates - find the deploy/CLI/build doc and add the new option
-   - If yes: ADD to the relevant existing doc. Find the right section. Search for related docs (deploy, CLI, build, etc.). Don't create new files.
+**Matching algorithm:**
+1. For EACH search term above, find docs whose path contains that term (case-insensitive).
+   - "deploy" matches: docs/Deployment.md, docs/deploy-plan.md, docs/guides/deploy.md
+   - "plan" matches: docs/deploy-plan.md, docs/planning.md
+   - "build" matches: docs/build.md, docs/BuildProject.md
+   - "cli" matches: docs/CLI.md, docs/beam-cli.md
+2. Consider partial matches: "deployment" covers "deploy", "DeployPlan" covers "deploy" and "plan"
+3. The docs to update = any doc that could document the changed commands/features
+4. If the PR changes deploy plan, deploy release, or build commands: docs about deployment, CLI, or build MUST be updated
 
-3. **NEW FILES - RARELY**: Only create a new file if:
-   - The PR introduces a major new feature/concept with NO existing doc to add to
-   - You have explicit justification
-   - Default: DO NOT create new files. When in doubt, add to existing docs or make no changes.
+**You MUST update at least one doc when the PR adds:**
+- New CLI flags (e.g. --max-parallel-count)
+- New command options
+- New config settings (e.g. MaxParallelBuildCount)
+- API or interface changes
 
 ## Output format
 For each file you edit, output:
@@ -62,11 +68,10 @@ For each file you edit, output:
 <full file content with your edits>
 ```
 
-- Use EXACT paths from the existing doc list above
+- Use EXACT paths from the existing doc list
 - Output the COMPLETE file content (preserve unchanged parts)
-- If the PR adds CLI flags, new options, or interface changes: you MUST find a relevant doc and add them. Do NOT output nothing for interface changes.
-- Only output nothing if the PR has NO user-facing changes (e.g. internal refactors, generated code only)
-- Do NOT create files like docs/new-feature.md unless the PR truly warrants a new top-level page
+- Only output nothing if the PR has ZERO user-facing changes (pure refactors, generated code only)
+- Do NOT conclude "no changes needed" when the PR adds CLI flags, options, or config - find a doc and add them
 
 {rules_text}
 """
@@ -75,20 +80,22 @@ For each file you edit, output:
 def build_user_prompt(
     pr_context_text: str,
     existing_docs: dict[str, str],
+    search_terms: list[str],
 ) -> str:
     """Build the user prompt with PR context and existing docs."""
     parts = [
-        "## Your task",
+        "## Step 1: Identify docs to update",
         "",
-        "1. Read the PR below.",
-        "2. Identify which EXISTING docs (if any) are INVALIDATED by these changes.",
-        "3. Identify what NEW CONTEXT should be added to EXISTING docs.",
-        "4. CLI/command changes (new flags, options) ALWAYS need documentation - search for deploy, CLI, build, or command docs.",
-        "5. Only if the PR introduces a major new feature with no existing doc: consider a new file.",
+        f"Search terms from this PR: {', '.join(search_terms) or 'deploy, plan, release, build, cli'}",
         "",
-        "IMPORTANT: If the PR adds new CLI flags or command options, you MUST find a relevant doc and add them. Do not conclude 'no changes needed' for interface changes.",
+        "Which existing docs (from the list below) have paths that match these terms?",
+        "Example: If the PR adds --max-parallel-count to beam deploy plan, look for docs containing 'deploy', 'plan', 'release', 'build', 'cli', 'command'.",
+        "List the matching doc paths, then add the new option/flag to each.",
         "",
-        "Output ONLY edits to existing files, or additions to existing files. Prefer editing over creating.",
+        "## Step 2: Add the documentation",
+        "",
+        "For each matching doc: add a section or update the options table to document the new flag/option.",
+        "Include: flag name, default value, and what it does.",
         "",
         "---",
         "",
@@ -96,7 +103,7 @@ def build_user_prompt(
         "",
         "---",
         "",
-        "## Existing documentation (reference when editing - use these exact paths)",
+        "## Existing documentation (search these for matches - use EXACT paths)",
         "",
     ]
 
@@ -108,8 +115,8 @@ def build_user_prompt(
         parts.append("")
 
     parts.append(
-        "Respond with docnerd blocks ONLY for files you are editing. "
-        "Use the exact path from the list above. Include the full file content with your changes."
+        "Output docnerd blocks for each doc you edit. Use the exact path. Include the full file content with your changes. "
+        "If the PR adds CLI options, you MUST update at least one doc - do not output nothing."
     )
 
     return "\n".join(parts)
@@ -171,14 +178,16 @@ class DocGenerator:
             List of DocEdit (path, content, is_new)
         """
         existing_paths = set(existing_docs.keys())
+        search_terms = extract_doc_search_terms(pr_context)
         system_prompt = build_system_prompt(
             self.rules_text,
             target_branch,
             nav_structure,
             list(existing_paths),
+            search_terms,
         )
         pr_text = format_pr_context_for_prompt(pr_context)
-        user_prompt = build_user_prompt(pr_text, existing_docs)
+        user_prompt = build_user_prompt(pr_text, existing_docs, search_terms)
 
         response = self.client.messages.create(
             model=self.model,

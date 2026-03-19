@@ -109,3 +109,41 @@ def format_pr_context_for_prompt(ctx: PRContext) -> str:
             lines.append("```")
 
     return "\n".join(lines)
+
+
+def extract_doc_search_terms(ctx: PRContext) -> list[str]:
+    """
+    Extract search terms from PR file paths and title to help match docs.
+    E.g. DeployArgs.cs, PlanDeploymentCommand.cs -> deploy, plan, deployment
+    """
+    import re
+
+    terms: set[str] = set()
+    path_keywords = [
+        "deploy", "plan", "release", "build", "project", "cli", "command",
+        "config", "configuration", "microservice", "editor", "api", "event",
+    ]
+
+    # From file paths
+    for f in ctx.files:
+        path = f["filename"].lower()
+        for kw in path_keywords:
+            if kw in path:
+                terms.add(kw)
+        for part in re.findall(r"[A-Z][a-z]+", f["filename"]):
+            terms.add(part.lower())
+
+    # From PR title (e.g. "Add --max-parallel-count flag to beam deploy plan")
+    title_lower = (ctx.title or "").lower()
+    for kw in path_keywords:
+        if kw in title_lower:
+            terms.add(kw)
+    for part in re.findall(r"\b[a-z]+\b", title_lower):
+        if len(part) > 3 and part in path_keywords:
+            terms.add(part)
+
+    # Always include these when we have deploy/build related terms
+    if any(t in terms for t in ["deploy", "plan", "release", "build"]):
+        terms.update(["deploy", "deployment", "build", "cli", "command"])
+
+    return sorted(terms)
