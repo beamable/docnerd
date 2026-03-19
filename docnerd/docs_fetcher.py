@@ -108,7 +108,7 @@ def fetch_existing_docs(
     max_files: int | None = None,
     max_priority_files: int | None = None,
     max_content_per_file: int = 6000,
-    max_secondary_files: int = 100,
+    max_secondary_files: int = 200,
     secondary_content_per_file: int = 2000,
     prioritize_terms: list[str] | None = None,
 ) -> tuple[dict[str, str], str, list[str]]:
@@ -133,7 +133,7 @@ def fetch_existing_docs(
     nav_text = get_nav_structure(config)
 
     all_md = sorted(_list_md_files(repo, docs_dir, ref))
-    pri_n = max_priority_files if max_priority_files is not None else (max_files if max_files is not None else 50)
+    pri_n = max_priority_files if max_priority_files is not None else (max_files if max_files is not None else 100)
     ordered = _prioritize_md_paths(all_md, prioritize_terms, len(all_md))
 
     docs: dict[str, str] = {}

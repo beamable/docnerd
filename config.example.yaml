@@ -32,10 +32,10 @@ branch_prefix: docnerd
 docs_fetcher:
   # Paths are ranked by PR search terms before capping (not raw A–Z) so cli/deploy docs load.
   # max_files is a deprecated alias for max_priority_files.
-  max_priority_files: 50
+  max_priority_files: 100
   max_content_per_file: 6000
   # Additional paths get short excerpts only (full inventory still listed in the system prompt)
-  max_secondary_files: 100
+  max_secondary_files: 200
   secondary_content_per_file: 2000
 
 # Doc generation behavior

@@ -28,9 +28,9 @@ doc_review_loop:
 
 # Docs fetcher limits (when loading from target repo)
 docs_fetcher:
-  max_priority_files: 50   # alias: max_files (deprecated)
+  max_priority_files: 100   # alias: max_files (deprecated)
   max_content_per_file: 6000
-  max_secondary_files: 100   # more paths as short previews (context only; not editable bodies)
+  max_secondary_files: 200   # more paths as short previews (context only; not editable bodies)
   secondary_content_per_file: 2000
 ```
 

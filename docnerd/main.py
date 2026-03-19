@@ -156,9 +156,9 @@ def run(
         existing_docs, nav_structure, all_doc_paths = fetch_existing_docs(
             target_repo,
             ref=target_branch,
-            max_priority_files=dfc.get("max_priority_files", dfc.get("max_files", 50)),
+            max_priority_files=dfc.get("max_priority_files", dfc.get("max_files", 100)),
             max_content_per_file=dfc.get("max_content_per_file", 6000),
-            max_secondary_files=dfc.get("max_secondary_files", 100),
+            max_secondary_files=dfc.get("max_secondary_files", 200),
             secondary_content_per_file=dfc.get("secondary_content_per_file", 2000),
             prioritize_terms=search_terms_for_fetch,
         )
