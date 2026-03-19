@@ -194,7 +194,6 @@ def run(
         return 1
 
     if not edits:
-        from docnerd.analyzer import extract_doc_search_terms
         search_terms = extract_doc_search_terms(pr_context)
         from docnerd.doc_generator import compute_matching_docs, ensure_matching_docs
 
