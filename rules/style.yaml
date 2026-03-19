@@ -1,0 +1,5 @@
+# Documentation style rules (passed to Claude)
+voice: second_person  # "You can configure..."
+tone: concise
+sentence_max_words: 25
+use_active_voice: true

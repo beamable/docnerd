@@ -1,0 +1,7 @@
+# Documentation structure rules (passed to Claude)
+required_sections:
+  - overview
+  - prerequisites
+  - steps
+  - examples
+heading_style: sentence_case

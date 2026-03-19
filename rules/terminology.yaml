@@ -1,0 +1,6 @@
+# Terminology rules (passed to Claude)
+preferred_terms:
+  config: configuration
+banned_terms:
+  - simply
+  - just

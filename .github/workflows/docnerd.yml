@@ -1,0 +1,23 @@
+# docNerd: Triggered by @docNerd, doc for <branch> comments on PRs
+# Add this workflow to your SOURCE repo. Configure the secrets below.
+# When using from another repo, change uses: ./ to uses: owner/docNerd@v1
+name: docNerd
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  docnerd:
+    if: github.event.issue.pull_request != null && contains(github.event.comment.body, '@docNerd')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          target-owner: ${{ secrets.DOCNERD_TARGET_OWNER }}
+          target-name: ${{ secrets.DOCNERD_TARGET_NAME }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          target-repo-token: ${{ secrets.DOCNERD_TARGET_REPO_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

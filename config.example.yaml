@@ -1,0 +1,29 @@
+# docNerd configuration
+# Copy to config.yaml and fill in values (or use environment variables)
+
+# Source repository (where PRs are opened)
+source_repo:
+  owner: your-org
+  name: your-source-repo
+  # token: set via GITHUB_TOKEN or SOURCE_REPO_TOKEN env var
+
+# Target documentation repository (MkDocs + Mike)
+target_repo:
+  owner: your-org
+  name: your-docs-repo
+  # token: set via TARGET_REPO_TOKEN env var (needs write access)
+
+# Claude / Anthropic
+llm:
+  api_key: ""  # set via ANTHROPIC_API_KEY env var
+  model: claude-sonnet-4-20250514
+  # base_url: optional, for custom endpoint
+
+# Path to rules directory (relative to project root or absolute)
+rules_path: rules
+
+# Comment trigger
+trigger_phrase: "@docNerd, doc for"
+
+# Branch naming for docNerd's working branches
+branch_prefix: docnerd

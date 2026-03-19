@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docnerd"
+version = "0.1.0"
+description = "Generate documentation PRs from source PR comments using Claude"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.39.0",
+    "PyGithub>=2.4.0",
+    "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["docnerd*"]

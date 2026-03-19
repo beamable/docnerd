@@ -1,0 +1,48 @@
+name: docNerd
+description: Generate documentation PRs from source PR comments using Claude
+branding:
+  icon: file-text
+  color: blue
+
+inputs:
+  target-owner:
+    description: Docs repository owner (e.g. your-org)
+    required: true
+  target-name:
+    description: Docs repository name (e.g. your-docs-repo)
+    required: true
+  github-token:
+    description: Token for GitHub API (pass secrets.GITHUB_TOKEN)
+    required: true
+  target-repo-token:
+    description: Token for docs repo (if different from github-token)
+    required: false
+  anthropic-api-key:
+    description: Anthropic API key for Claude
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install docNerd
+      run: pip install -e ${{ github.action_path }}
+      shell: bash
+
+    - name: Run docNerd
+      shell: bash
+      env:
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+        SOURCE_OWNER: ${{ github.repository_owner }}
+        SOURCE_NAME: ${{ github.event.repository.name }}
+        TARGET_REPO_OWNER: ${{ inputs.target-owner }}
+        TARGET_REPO_NAME: ${{ inputs.target-name }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        TARGET_REPO_TOKEN: ${{ inputs.target-repo-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: python -m docnerd.main
