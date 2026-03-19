@@ -89,8 +89,12 @@ def run(
         _comment(pr, "I couldn't find that branch.")
         return 0
 
-    # Reply "working on it"
-    _comment(pr, "yes, working on it")
+    # Reply "working on it" (with workflow link if running in GitHub Actions)
+    run_url = os.getenv("GITHUB_RUN_URL")
+    if run_url:
+        _comment(pr, f"yes, working on it. [Watch the workflow]({run_url})")
+    else:
+        _comment(pr, "yes, working on it")
 
     # Check for existing PR (idempotency)
     branch_prefix = config.get("branch_prefix", "docnerd")
@@ -162,6 +166,14 @@ def run(
         return 1
 
     if not edits:
+        from docnerd.analyzer import extract_doc_search_terms
+        search_terms = extract_doc_search_terms(pr_context)
+        from docnerd.doc_generator import compute_matching_docs
+        matching = compute_matching_docs(list(existing_docs.keys()), search_terms)
+        logger.warning(
+            "Claude returned no edits. doc_count=%d search_terms=%s matching_docs=%d",
+            len(existing_docs), search_terms, len(matching),
+        )
         _comment(pr, "I reviewed the PR but didn't find documentation changes that needed to be made.")
         return 0
 
