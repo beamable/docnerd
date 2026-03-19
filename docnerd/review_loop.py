@@ -27,27 +27,46 @@ REVIEWER_SYSTEM = """You are an independent documentation reviewer. Your audienc
 
 You receive:
 1. The pull request description and code changes (source of truth).
-2. The **proposed** documentation draft (markdown) that another writer produced.
+2. **Every loaded documentation page** from the target branch: the writer may have updated some; others are unchanged. Updated pages show more text; unchanged pages show a **short excerpt** so you can still judge fit.
 
-Your job: decide whether the docs adequately explain **what changed** and **why it matters** to that user (behavior, options, defaults, workflows, caveats).
+Your job has **two** parts:
 
-**Mandatory lens (every review):** You must explicitly judge whether the draft answers **"Why does the user care about this?"** for the PR's user-visible changes. If that is missing, buried, or only obvious to someone who read the code, respond with `needs_revision`.
+### A) Cross-page coverage (required every round)
+For **each** file section below (exact path), decide whether that page—given its role in the site—should mention something about this PR, or correctly stay silent.
 
-**Mandatory question when revision is needed:** If you return `needs_revision`, your `questions` array **must include** a clear variant of **"Why does the user care about this change?"** tailored to this PR (e.g. tie it to deploy failures, configuration, or workflow impact)—unless you already asked an equivalent specific question in the same list. Do not omit this user-value angle.
+- **Bad pattern to flag:** One file is overloaded with PR detail while **sibling** pages in the same topic area (e.g. multiple guides under `docs/cli/`, or the same feature split across guides) say **nothing**, even though readers landing there would reasonably expect a pointer or short context.
+- **Good pattern:** **One canonical** page carries the full explanation; **related** loaded pages get a **brief** note (1–3 sentences + link to canonical)—not a copy-paste of the whole story.
+
+Include **every** path from the sections below in `file_assessments` (same path strings). For sections marked **PREVIEW ONLY**, use verdict `ok` unless the excerpt clearly proves an error—do **not** use `needs_brief_mention` / `needs_detail` on those paths (the writer cannot save them); instead call out a loaded alternative in `questions` or another file’s `note`.
+
+Use verdict:
+- `ok` — appropriate level of coverage for this page’s purpose; no change needed.
+- `needs_brief_mention` — page should add a short pointer / context + link; it should not stay silent.
+- `needs_detail` — this page is the right home for deeper PR-specific explanation (missing or too thin).
+- `trim_or_redistribute` — too much detail **here**; move or shorten here and surface briefly elsewhere as appropriate.
+- `incorrect` — contradicts the PR or misleads users.
+
+Each assessment needs a short `note` (one line).
+
+### B) User value
+Judge whether the set of docs answers **"Why does the user care about this?"** for user-visible PR changes.
+
+**Mandatory question when revision is needed:** If you return `needs_revision`, your `questions` array **must include** a clear variant of **"Why does the user care about this change?"** tailored to this PR—unless an equivalent is already in the list.
 
 Rules:
 - Be strict but fair. Superficial command lists without PR-specific detail are NOT adequate.
-- If anything important for a user is missing, unclear, or wrong relative to the PR, require revision.
-- Ask **concrete** questions the writer can answer by updating the docs (not vague "improve this").
-- Prefer **minimal** follow-up: if a small addition or correction fixes the gap, do not push for rewrites across many files or long new sections.
+- Ask **concrete** questions the writer can answer (not vague "improve this").
+- Prefer **small** edits: brief mentions on sibling pages, trim bloat on overloaded pages—avoid demanding huge rewrites unless necessary.
 
 Output **only** a single JSON object in a markdown code fence labeled json. No other text before or after the fence.
 
 Schema:
-- If the docs are good enough: `{"status": "satisfied"}`
-- If not: `{"status": "needs_revision", "questions": ["question 1", "question 2", ...]}`
+- If everything is good: `{"status": "satisfied", "file_assessments": [ ... every path ... ]}`
+- If not: `{"status": "needs_revision", "questions": ["..."], "file_assessments": [ ... ]}`
 
-Use at most 8 questions per round. Be specific."""
+`file_assessments` is an array of objects: `{"path": "docs/...", "verdict": "ok|needs_brief_mention|needs_detail|trim_or_redistribute|incorrect", "note": "..."}` — **one entry per file section below**, in any order.
+
+Use at most **8** items in `questions` (synthesize from assessments). Be specific."""
 
 
 def apply_edits_to_draft(base: dict[str, str], edits: list[DocEdit]) -> dict[str, str]:
@@ -68,11 +87,14 @@ def draft_to_final_edits(original: dict[str, str], draft: dict[str, str]) -> lis
     return result
 
 
-def parse_reviewer_response(text: str) -> tuple[bool, list[str]]:
-    """
-    Parse reviewer model output. Returns (satisfied, questions).
+_VERDICT_OK = frozenset({"ok", "satisfied", "none", "n/a", "no_change"})
 
-    If parsing fails, returns (True, []) to avoid infinite loops.
+
+def parse_reviewer_response(text: str) -> tuple[bool, list[str], list[dict[str, str]]]:
+    """
+    Parse reviewer model output. Returns (satisfied, questions, file_assessments).
+
+    If parsing fails, returns (True, [], []) to avoid infinite loops.
     """
     raw: str | None = None
     m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text.strip())
@@ -84,16 +106,28 @@ def parse_reviewer_response(text: str) -> tuple[bool, list[str]]:
             raw = m2.group(0).strip()
     if not raw:
         logger.warning("Reviewer response had no JSON; treating as satisfied")
-        return True, []
+        return True, [], []
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         logger.warning("Reviewer JSON invalid; treating as satisfied: %s", raw[:200])
-        return True, []
+        return True, [], []
+
+    assessments_raw = data.get("file_assessments", [])
+    file_assessments: list[dict[str, str]] = []
+    if isinstance(assessments_raw, list):
+        for item in assessments_raw:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "")).strip()
+            verdict = str(item.get("verdict", "")).strip()
+            note = str(item.get("note", "")).strip()
+            if path and verdict:
+                file_assessments.append({"path": path, "verdict": verdict, "note": note})
 
     status = str(data.get("status", "")).lower().replace(" ", "_")
     if status == "satisfied":
-        return True, []
+        return True, [], file_assessments
 
     qs = data.get("questions", [])
     if isinstance(qs, str):
@@ -101,30 +135,95 @@ def parse_reviewer_response(text: str) -> tuple[bool, list[str]]:
     if not isinstance(qs, list):
         qs = []
     questions = [str(q).strip() for q in qs if str(q).strip()]
-    return False, questions[:8]
+    return False, questions[:8], file_assessments
 
 
-def _reviewer_user_prompt(pr_text: str, draft: dict[str, str], paths: list[str], max_chars_per_file: int = 16000) -> str:
+def _reviewer_user_prompt(
+    pr_text: str,
+    draft: dict[str, str],
+    baseline: dict[str, str],
+    preview_only_paths: set[str],
+    *,
+    max_chars_updated: int = 12000,
+    max_chars_unchanged: int = 3200,
+) -> str:
+    """
+    Show every loaded doc so the reviewer can judge coverage across the tree.
+    Writer-updated pages get a larger slice; unchanged pages get a shorter excerpt.
+    """
     parts = [
         "## Pull request (what actually changed)",
         pr_text,
         "",
-        "## Proposed documentation (your review target)",
+        "## All loaded documentation pages (assess each path in your JSON)",
+        "",
+        "Sections are sorted by path. **UPDATED** = writer changed this file vs the baseline branch. "
+        "**UNCHANGED** = baseline content (excerpt if long); decide if this page should still mention the PR briefly. "
+        "**PREVIEW ONLY** = only a truncated excerpt was loaded; the writer **cannot** emit docnerd for that path—use verdict `ok` "
+        "or suggest a **fully loaded** sibling/canonical page instead of `needs_brief_mention` on preview paths.",
         "",
     ]
-    for p in paths:
+    sorted_paths = sorted(draft.keys())
+    for p in sorted_paths:
         content = draft.get(p, "")
-        if len(content) > max_chars_per_file:
-            content = content[:max_chars_per_file] + "\n\n... (truncated for review context)"
-        parts.append(f"### {p}")
+        updated = baseline.get(p) != content
+        cap = max_chars_updated if updated else max_chars_unchanged
+        if p in preview_only_paths:
+            label = "PREVIEW ONLY (writer cannot edit this path)"
+        elif updated:
+            label = "UPDATED by writer"
+        else:
+            label = "UNCHANGED (excerpt if truncated)"
+        if len(content) > cap:
+            content = content[:cap] + "\n\n... (truncated for review context)"
+        parts.append(f"### {p} ({label})")
         parts.append("```markdown")
         parts.append(content)
         parts.append("```")
         parts.append("")
     parts.append(
-        "Respond with only the JSON object in a ```json code block as specified in your instructions."
+        "Respond with only the JSON object in a ```json code block as specified in your instructions. "
+        "Include `file_assessments` with **one entry per path** listed above."
     )
     return "\n".join(parts)
+
+
+def _assessment_flags_revision(assessments: list[dict[str, str]]) -> bool:
+    for a in assessments:
+        v = str(a.get("verdict", "")).lower().strip().replace(" ", "_")
+        if v in _VERDICT_OK:
+            continue
+        if v in ("needs_brief_mention", "needs_detail", "trim_or_redistribute", "incorrect"):
+            return True
+    return False
+
+
+def _questions_from_assessments(
+    assessments: list[dict[str, str]], existing: list[str]
+) -> list[str]:
+    """Turn per-file verdicts into concrete writer tasks (deduped, capped)."""
+    out: list[str] = list(existing)
+    for a in assessments:
+        v = str(a.get("verdict", "")).lower().strip().replace(" ", "_")
+        if v in _VERDICT_OK:
+            continue
+        if v not in ("needs_brief_mention", "needs_detail", "trim_or_redistribute", "incorrect"):
+            continue
+        path = str(a.get("path", "")).strip()
+        note = str(a.get("note", "")).strip()
+        if not path:
+            continue
+        piece = f"`{path}` — {v.replace('_', ' ')}"
+        if note:
+            piece += f": {note}"
+        out.append(piece)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for q in out:
+        if q not in seen:
+            seen.add(q)
+            deduped.append(q)
+    return deduped[:8]
 
 
 def run_review_refinement_loop(
@@ -184,18 +283,21 @@ def run_review_refinement_loop(
         if not review_paths:
             break
 
-        reviewer_user = _reviewer_user_prompt(pr_text, draft, review_paths)
+        reviewer_user = _reviewer_user_prompt(
+            pr_text, draft, existing_docs, preview_blocked
+        )
         logger.info(
-            "Reviewer round %d: prompt sizes system=%d user=%d paths=%s",
+            "Reviewer round %d: prompt sizes system=%d user=%d changed=%d total_loaded=%d",
             round_idx + 1,
             len(REVIEWER_SYSTEM),
             len(reviewer_user),
-            review_paths,
+            len(review_paths),
+            len(draft),
         )
 
         resp = client.messages.create(
             model=model,
-            max_tokens=4096,
+            max_tokens=8192,
             system=REVIEWER_SYSTEM,
             messages=[{"role": "user", "content": reviewer_user}],
         )
@@ -204,13 +306,24 @@ def run_review_refinement_loop(
             if hasattr(block, "text"):
                 review_text += block.text
 
-        satisfied, questions = parse_reviewer_response(review_text)
+        satisfied, questions, file_assessments = parse_reviewer_response(review_text)
+
+        if satisfied and _assessment_flags_revision(file_assessments):
+            logger.info(
+                "Reviewer returned satisfied but file_assessments contain non-ok verdicts; treating as revision"
+            )
+            satisfied = False
+            questions = _questions_from_assessments(file_assessments, questions)
+
         if satisfied:
             logger.info("Reviewer satisfied after round %d", round_idx + 1)
             break
 
+        if not questions and _assessment_flags_revision(file_assessments):
+            questions = _questions_from_assessments(file_assessments, [])
+
         if not questions:
-            logger.info("Reviewer needs_revision but no questions; stopping")
+            logger.info("Reviewer needs_revision but no questions or actionable assessments; stopping")
             break
 
         if time.monotonic() >= deadline:
@@ -224,6 +337,7 @@ def run_review_refinement_loop(
             search_terms,
             matching_docs,
             touched_paths,
+            file_assessments=file_assessments,
         )
         logger.info(
             "Refinement round %d: addressing %d question(s), user prompt %d chars",

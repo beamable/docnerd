@@ -217,7 +217,7 @@ Search terms from PR: {terms_str}
 **These paths matched the PR terms** (prioritize here first, but you may choose another **loaded** file if it is the better home):
 {matching_list}
 
-**Your task:** Integrate the PR with **surgical** edits. Default to **1–2** files; use **at most 3** unless the PR truly touches separate major areas. Do **not** rewrite whole pages or duplicate the same paragraph across many files—one canonical spot, short cross-links elsewhere if needed.
+**Your task:** Integrate the PR with **surgical** edits. Prefer **1–2** files when the PR is narrow; use **up to ~4–5** when several **sibling** guides in the same topic area (e.g. under `docs/cli/`) each need a **brief** pointer—still avoid pasting the same long section everywhere. Pattern: **one canonical** page with depth; related loaded pages get **1–3 sentences + link**, not duplicate tutorials. Do **not** rewrite whole pages without cause.
 
 **Depth (avoid superficial docs):**
 - Ground everything in the PR: use exact command names, flags, and behavior from the diff and file content—never invent options or links.
@@ -277,7 +277,7 @@ def build_user_prompt(
         f"Strong path matches (search terms): {matching_preview}",
         "",
         "Document what changed with **minimal** edits: prefer a short subsection, table row, or paragraph—not a full page rewrite. "
-        "Default **1–2** `docnerd` files, **max 3** unless the PR clearly spans separate areas. "
+        "Usually **1–2** `docnerd` files; use more only when **multiple sibling guides** in the same topic folder should each get a **short** mention + link to the canonical page (do not duplicate long explanations). "
         "Skim **preview** sections only to decide where a loaded (non-preview) page should carry the change.",
         "",
         "---",
@@ -336,35 +336,65 @@ def build_refine_user_prompt(
     search_terms: list[str],
     matching_docs: list[str],
     touched_paths: set[str],
+    file_assessments: list[dict[str, str]] | None = None,
 ) -> str:
     """User prompt for a refinement pass after reviewer feedback."""
     matching_preview = ", ".join(matching_docs[:8]) if matching_docs else "see system prompt"
     q_lines = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(reviewer_questions))
 
-    # Include draft content for touched + matching docs (same coverage as initial pass)
     paths_to_show: set[str] = set(touched_paths)
     paths_to_show.update(matching_docs)
+    if file_assessments:
+        for a in file_assessments:
+            v = str(a.get("verdict", "")).lower().strip().replace(" ", "_")
+            if v in ("ok", "satisfied", "none", "n/a", "no_change"):
+                continue
+            p = str(a.get("path", "")).strip()
+            if p:
+                paths_to_show.add(p)
 
     parts = [
         "## Reviewer feedback — address every point in the documentation",
         "",
         q_lines,
         "",
-        "Revise with **small** diffs: answer the questions without expanding scope. Output full file content in docnerd blocks only for files you actually change (prefer ≤2 files).",
-        "",
-        "## Task",
-        "",
-        f"Matching docs (search terms): {matching_preview}",
-        "",
-        "---",
-        "",
-        pr_context_text,
-        "",
-        "---",
-        "",
-        "## Current documentation draft (revise as needed; use EXACT paths)",
-        "",
     ]
+    if file_assessments:
+        parts.extend(
+            [
+                "## Reviewer per-file coverage (implement verdicts; use brief text on sibling pages)",
+                "",
+            ]
+        )
+        for a in sorted(file_assessments, key=lambda x: str(x.get("path", ""))):
+            path = str(a.get("path", "")).strip()
+            verdict = str(a.get("verdict", "")).strip()
+            note = str(a.get("note", "")).strip()
+            if not path:
+                continue
+            parts.append(f"- **`{path}`** — `{verdict}`" + (f": {note}" if note else ""))
+        parts.append("")
+
+    parts.extend(
+        [
+            "Revise with **small** diffs. Output full file content in `docnerd` blocks for **each** file you change. "
+            "If the table above flags several guides, you may touch **multiple** paths—use **short** additions + links on secondary pages; keep depth on the **canonical** page. "
+            "For `trim_or_redistribute`, shorten the overloaded file and add brief pointers elsewhere as indicated.",
+            "",
+            "## Task",
+            "",
+            f"Matching docs (search terms): {matching_preview}",
+            "",
+            "---",
+            "",
+            pr_context_text,
+            "",
+            "---",
+            "",
+            "## Current documentation draft (revise as needed; use EXACT paths)",
+            "",
+        ]
+    )
 
     ordered = sorted(paths_to_show, key=lambda p: (0 if p in matching_docs else 1, p))
     for path in ordered:
@@ -379,7 +409,8 @@ def build_refine_user_prompt(
 
     parts.append(
         "Output docnerd blocks with complete file content for every file you change. "
-        "Keep the change set small. If you touch SUMMARY.md or nav, every link target must exist in the repo doc set."
+        "Match the reviewer’s spread: brief on secondary guides, depth on the canonical page. "
+        "If you touch SUMMARY.md or nav, every link target must exist in the repo doc set."
     )
 
     return "\n".join(parts)

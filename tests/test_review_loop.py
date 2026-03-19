@@ -14,19 +14,36 @@ def test_parse_reviewer_satisfied_json_block():
 {"status": "satisfied"}
 ```
 """
-    sat, qs = parse_reviewer_response(text)
+    sat, qs, assessments = parse_reviewer_response(text)
     assert sat is True
     assert qs == []
+    assert assessments == []
 
 
 def test_parse_reviewer_needs_revision():
     text = """```json
 {"status": "needs_revision", "questions": ["What is the default?", "Any caveats?"]}
 ```"""
-    sat, qs = parse_reviewer_response(text)
+    sat, qs, assessments = parse_reviewer_response(text)
     assert sat is False
     assert len(qs) == 2
     assert "default" in qs[0]
+    assert assessments == []
+
+
+def test_parse_reviewer_file_assessments():
+    text = """```json
+{"status": "needs_revision", "questions": ["Q1"],
+ "file_assessments": [
+   {"path": "docs/cli/a.md", "verdict": "ok", "note": "fine"},
+   {"path": "docs/cli/b.md", "verdict": "needs_brief_mention", "note": "add link"}
+ ]}
+```"""
+    sat, qs, assessments = parse_reviewer_response(text)
+    assert sat is False
+    assert qs == ["Q1"]
+    assert len(assessments) == 2
+    assert assessments[1]["path"] == "docs/cli/b.md"
 
 
 def test_apply_and_draft_to_final():

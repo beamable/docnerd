@@ -38,7 +38,7 @@ docs_fetcher:
 
 - **`allow_new_files`** — When `false`, docNerd will only edit existing files. Any new-file suggestions from Claude are filtered out. Default: `true`.
 
-- **`doc_review_loop`** — After the initial writer pass, a reviewer model checks whether the docs explain the PR for a public user. If not, it emits JSON questions; the writer refines until the reviewer returns `satisfied`, or `max_wall_seconds` / `max_rounds` is hit. Set `enabled: false` to skip (single pass only).
+- **`doc_review_loop`** — After the initial writer pass, a reviewer model sees **every loaded doc page** (full slice for files the writer changed, shorter excerpt for unchanged pages). It returns `file_assessments` with a verdict **per path** (e.g. `needs_brief_mention` on sibling guides, `trim_or_redistribute` when one file is overloaded) plus up to 8 `questions`. The writer’s refine step follows that coverage plan. Pages that were only loaded as **preview excerpts** are labeled for the reviewer so it does not demand edits the writer cannot apply. Set `enabled: false` to skip (single pass only).
 
 ### Rules: `rules/doc_generation.yaml`
 
