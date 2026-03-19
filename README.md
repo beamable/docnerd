@@ -54,6 +54,8 @@ In your source repo: **Settings → Secrets and variables → Actions**
 | `DOCNERD_TARGET_REPO_TOKEN` | No | Token for docs repo if different from `GITHUB_TOKEN` |
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key for Claude |
 
+**→ See [docs/SECRETS_SETUP.md](docs/SECRETS_SETUP.md) for detailed instructions on obtaining and configuring each secret.**
+
 ### 3. Add config and rules (optional)
 
 Add to your source repo root:
@@ -78,6 +80,15 @@ If omitted, docNerd uses built-in defaults. See `config.example.yaml` and `rules
 | `github-token` | Yes | Pass `secrets.GITHUB_TOKEN` |
 | `target-repo-token` | No | Token for docs repo (if different) |
 | `anthropic-api-key` | Yes | Anthropic API key |
+
+## Development
+
+Run tests locally:
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+```
 
 ## Requirements
 

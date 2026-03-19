@@ -19,7 +19,7 @@ def make_work_branch_name(source_pr_number: int, target_branch: str, prefix: str
 
 
 def find_existing_docs_pr(
-    repo: Repository.Repository,
+    repo: Repository,
     source_pr_number: int,
     target_branch: str,
     branch_prefix: str = "docnerd",
@@ -37,7 +37,7 @@ def find_existing_docs_pr(
 
 
 def create_docs_pr(
-    repo: Repository.Repository,
+    repo: Repository,
     target_branch: str,
     source_pr_number: int,
     source_pr_url: str,

@@ -3,7 +3,7 @@
 from github.Repository import Repository
 
 
-def validate_branch(repo: Repository.Repository, branch_name: str) -> bool:
+def validate_branch(repo: Repository, branch_name: str) -> bool:
     """
     Check if the requested branch exists in the docs repository.
 
