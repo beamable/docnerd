@@ -224,10 +224,9 @@ class DocGenerator:
         pr_text = format_pr_context_for_prompt(pr_context)
         user_prompt = build_user_prompt(pr_text, existing_docs, search_terms, matching_docs)
 
-        logger.info("=== System prompt (to Claude) ===")
-        logger.info("%s", system_prompt)
-        logger.info("=== User prompt (to Claude) ===")
-        logger.info("%s", user_prompt)
+        logger.info("=== Prompts (summary - source code omitted from logs) ===")
+        logger.info("System prompt: %d chars", len(system_prompt))
+        logger.info("User prompt: %d chars (PR context + existing docs - not logged)", len(user_prompt))
 
         response = self.client.messages.create(
             model=self.model,
@@ -241,7 +240,11 @@ class DocGenerator:
             if hasattr(block, "text"):
                 text += block.text
 
-        logger.info("=== Claude response ===")
-        logger.info("%s", text)
+        edits_result = parse_docnerd_response(text, existing_paths)
+        if edits_result:
+            paths = [e.path for e in edits_result]
+            logger.info("Claude response: %d edit(s) to %s", len(edits_result), paths)
+        else:
+            logger.info("Claude response: no docnerd blocks parsed (raw length %d chars)", len(text))
 
-        return parse_docnerd_response(text, existing_paths)
+        return edits_result

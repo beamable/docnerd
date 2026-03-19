@@ -73,13 +73,13 @@ def create_docs_pr(
         repo.create_git_ref(f"refs/heads/{work_branch}", base_sha)
     except Exception as e:
         if "Reference already exists" in str(e):
-            # Branch exists - we may need to update it or return existing PR
+            # Branch exists - return existing PR if open, else force-reset to base
             existing = find_existing_docs_pr(repo, source_pr_number, target_branch, branch_prefix)
             if existing:
                 return existing
-            # Force update branch to base
+            # Force-reset branch to base (allows non-fast-forward when branch has diverged)
             ref = repo.get_git_ref(f"heads/{work_branch}")
-            ref.edit(base_sha)
+            ref.edit(base_sha, force=True)
         else:
             raise
 
