@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: owner/docNerd@v1
+      - uses: beamable/docnerd@v1
         with:
           target-owner: ${{ secrets.DOCNERD_TARGET_OWNER }}
           target-name: ${{ secrets.DOCNERD_TARGET_NAME }}
@@ -40,7 +40,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Replace `owner/docNerd` with your repo path (e.g. `chrishanna/docNerd`).
+Replace `beamable/docnerd` with your repo path if different.
 
 ### 2. Configure secrets
 

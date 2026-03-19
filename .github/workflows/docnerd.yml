@@ -1,6 +1,6 @@
 # docNerd: Triggered by @docNerd, doc for <branch> comments on PRs
 # Add this workflow to your SOURCE repo. Configure the secrets below.
-# When using from another repo, change uses: ./ to uses: owner/docNerd@v1
+# When using from another repo, change uses: ./ to uses: beamable/docnerd@v1
 name: docNerd
 
 on:
