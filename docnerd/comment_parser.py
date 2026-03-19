@@ -13,10 +13,10 @@ class TriggerMatch:
     raw_comment: str = ""
 
 
-# Default trigger pattern: @docNerd, doc for <branch>
+# Default trigger pattern: @docNerd, doc for <branch> OR @docNerd, add docs to <branch>
 # Branch can contain letters, numbers, slashes, dots, hyphens
 DEFAULT_PATTERN = re.compile(
-    r"@docNerd\s*,\s*doc\s+for\s+([\w./\-]+)",
+    r"@docNerd\s*,\s*(?:doc\s+for|add\s+docs?\s+to)\s+([\w./\-]+)",
     re.IGNORECASE,
 )
 
@@ -50,3 +50,11 @@ def parse_trigger(comment_body: str, trigger_phrase: str | None = None) -> Trigg
             return TriggerMatch(matched=True, branch=branch, raw_comment=comment_body)
 
     return TriggerMatch(matched=False, raw_comment=comment_body)
+
+
+def mentions_docnerd(comment_body: str) -> bool:
+    """Return True if the comment appears to be addressing docNerd (e.g. @docNerd or @docnerd)."""
+    if not comment_body or not comment_body.strip():
+        return False
+    lower = comment_body.lower()
+    return "@docnerd" in lower

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from docnerd.analyzer import analyze_pr
 from docnerd.branch_validator import validate_branch
-from docnerd.comment_parser import parse_trigger
+from docnerd.comment_parser import mentions_docnerd, parse_trigger
 from docnerd.config import load_config
 from docnerd.doc_generator import DocGenerator
 from docnerd.docs_fetcher import fetch_existing_docs
@@ -53,6 +53,21 @@ def run(
 
     match = parse_trigger(comment_body, trigger_phrase)
     if not match.matched or not match.branch:
+        if mentions_docnerd(comment_body):
+            source_token = config.get("source_repo", {}).get("token") or os.getenv("GITHUB_TOKEN")
+            if source_token:
+                gh = get_github_client(source_token)
+                source_repo = get_repo(gh, source_owner, source_name)
+                pr = get_pr(source_repo, pr_number)
+                help_msg = (
+                    "I didn't understand that. Valid commands:\n\n"
+                    "- `@docNerd, doc for <branch>` — generate docs for the specified branch\n"
+                    "- `@docNerd, add docs to <branch>` — same as above\n\n"
+                    "Example: `@docNerd, doc for core/v7.1`"
+                )
+                _comment(pr, help_msg)
+            else:
+                logger.warning("docNerd mentioned but no token to post help")
         logger.info("Comment does not match trigger, skipping")
         return 0
 
