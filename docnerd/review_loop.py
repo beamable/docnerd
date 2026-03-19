@@ -13,13 +13,15 @@ from docnerd.doc_generator import (
     DocEdit,
     build_refine_user_prompt,
     build_system_prompt,
+    filter_edits_not_preview_only,
     parse_docnerd_response,
+    preview_only_paths,
 )
 
 logger = logging.getLogger("docnerd.review_loop")
 
 DEFAULT_MAX_WALL_SECONDS = 600
-DEFAULT_MAX_ROUNDS = 8
+DEFAULT_MAX_ROUNDS = 5
 
 REVIEWER_SYSTEM = """You are an independent documentation reviewer. Your audience is a **public user** of the product who reads only our docs—not the PR or source code.
 
@@ -37,6 +39,7 @@ Rules:
 - Be strict but fair. Superficial command lists without PR-specific detail are NOT adequate.
 - If anything important for a user is missing, unclear, or wrong relative to the PR, require revision.
 - Ask **concrete** questions the writer can answer by updating the docs (not vague "improve this").
+- Prefer **minimal** follow-up: if a small addition or correction fixes the gap, do not push for rewrites across many files or long new sections.
 
 Output **only** a single JSON object in a markdown code fence labeled json. No other text before or after the fence.
 
@@ -138,6 +141,7 @@ def run_review_refinement_loop(
     allow_new_files: bool,
     initial_edits: list[DocEdit],
     *,
+    all_doc_paths: list[str] | None = None,
     max_wall_seconds: float = DEFAULT_MAX_WALL_SECONDS,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> list[DocEdit]:
@@ -151,6 +155,8 @@ def run_review_refinement_loop(
 
     deadline = time.monotonic() + max_wall_seconds
     pr_text = format_pr_context_for_prompt(pr_context)
+    inventory_paths = list(all_doc_paths) if all_doc_paths else sorted(existing_paths)
+    preview_blocked = preview_only_paths(existing_docs)
     writer_system = build_system_prompt(
         rules_text,
         target_branch,
@@ -159,6 +165,7 @@ def run_review_refinement_loop(
         search_terms,
         matching_docs,
         allow_new_files=allow_new_files,
+        all_doc_paths_inventory=inventory_paths,
     )
 
     draft = apply_edits_to_draft(existing_docs, initial_edits)
@@ -236,7 +243,9 @@ def run_review_refinement_loop(
             if hasattr(block, "text"):
                 writer_text += block.text
 
-        refined = parse_docnerd_response(writer_text, existing_paths)
+        refined = filter_edits_not_preview_only(
+            parse_docnerd_response(writer_text, existing_paths), preview_blocked
+        )
         if not refined:
             logger.warning("Refinement produced no docnerd blocks; keeping previous draft")
             round_idx += 1

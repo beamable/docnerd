@@ -10,6 +10,7 @@ from typing import Any
 from anthropic import Anthropic
 
 from docnerd.analyzer import PRContext, extract_doc_search_terms, format_pr_context_for_prompt
+from docnerd.docs_fetcher import DOCS_PREVIEW_ONLY_SENTINEL
 from docnerd.rules_engine import format_rules_for_prompt, load_rules
 
 logger = logging.getLogger("docnerd.doc_generator")
@@ -131,6 +132,39 @@ def ensure_matching_docs_not_empty_for_user_facing_pr(
     return sorted(existing_paths)[:limit]
 
 
+def preview_only_paths(existing_docs: dict[str, str]) -> set[str]:
+    """Paths whose loaded body is a truncated preview only (must not receive docnerd output)."""
+    return {p for p, c in existing_docs.items() if DOCS_PREVIEW_ONLY_SENTINEL in c}
+
+
+def filter_edits_not_preview_only(
+    edits: list[DocEdit], preview_paths: set[str], *, log_dropped: bool = True
+) -> list[DocEdit]:
+    """Drop edits targeting preview-only paths (safety net if the model ignores instructions)."""
+    if not preview_paths or not edits:
+        return edits
+    before = len(edits)
+    out = [e for e in edits if e.path not in preview_paths]
+    dropped = before - len(out)
+    if dropped and log_dropped:
+        logger.warning(
+            "Dropped %d edit(s) targeting preview-only doc path(s) (not fully loaded)",
+            dropped,
+        )
+    return out
+
+
+def _format_doc_inventory(paths: list[str], max_lines: int = 600) -> str:
+    """Full path list for the model to reason about site coverage (capped for huge repos)."""
+    if not paths:
+        return "(none listed)"
+    lines = paths[:max_lines]
+    body = "\n".join(f"- {p}" for p in lines)
+    if len(paths) > max_lines:
+        body += f"\n- ... and {len(paths) - max_lines} more .md files under docs"
+    return body
+
+
 def build_system_prompt(
     rules_text: str,
     target_branch: str,
@@ -139,9 +173,14 @@ def build_system_prompt(
     search_terms: list[str],
     matching_docs: list[str],
     allow_new_files: bool = True,
+    all_doc_paths_inventory: list[str] | None = None,
+    max_inventory_lines: int = 600,
 ) -> str:
     """Build the system prompt with strict doc generation rules."""
-    paths_list = "\n".join(f"- {p}" for p in existing_doc_paths[:80])
+    inventory_paths = (
+        list(all_doc_paths_inventory) if all_doc_paths_inventory else sorted(set(existing_doc_paths))
+    )
+    inventory_text = _format_doc_inventory(inventory_paths, max_inventory_lines)
     terms_str = ", ".join(search_terms) if search_terms else "(none extracted)"
     matching_list = "\n".join(f"- {p}" for p in matching_docs) if matching_docs else "(none)"
 
@@ -162,18 +201,23 @@ Target branch: {target_branch}
 {nav_structure}
 ```
 
-## Existing doc files (use EXACT paths from this list)
-{paths_list}
+## Complete markdown inventory (all .md paths in docs_dir)
+Skim this list and consider whether the PR warrants a **small** update anywhere—not only the “matching” paths. Prefer the **fewest** files and **smallest** diffs that still explain the change.
+
+{inventory_text}
+
+**Loaded bodies** (full or excerpt) appear in the user message. You may only output `docnerd` for paths whose body does **not** contain the preview-only notice (truncated excerpt marker).
+
 {new_files_guidance}
 
-## REQUIRED: Docs you MUST update (pre-computed matches)
+## REQUIRED: Strong candidates (pre-computed path matches)
 
 Search terms from PR: {terms_str}
 
-**These docs match and MUST be updated** (path contains deploy, plan, build, cli, command, etc.):
+**These paths matched the PR terms** (prioritize here first, but you may choose another **loaded** file if it is the better home):
 {matching_list}
 
-**Your task:** Integrate the PR into the docs above. Prefer docs/cli/, docs/cli/commands/, or deployment guides. Update the pages that best explain the *changed* behavior.
+**Your task:** Integrate the PR with **surgical** edits. Default to **1–2** files; use **at most 3** unless the PR truly touches separate major areas. Do **not** rewrite whole pages or duplicate the same paragraph across many files—one canonical spot, short cross-links elsewhere if needed.
 
 **Depth (avoid superficial docs):**
 - Ground everything in the PR: use exact command names, flags, and behavior from the diff and file content—never invent options or links.
@@ -182,7 +226,7 @@ Search terms from PR: {terms_str}
 - For new flags/options: default, effect, and when to tune it (who benefits, tradeoffs).
 - Only link to paths that appear in the existing doc file list above. Never add `[text](path.md)` to files that do not exist.
 
-**Voice:** Match the existing page (headings, bullets vs prose). Be dense and useful—no filler—but **substance beats brevity** when the PR warrants a short paragraph or a worked example.
+**Voice:** Match the existing page (headings, bullets vs prose). Be dense—**add only what the PR requires**; avoid tutorial bloat and repeated background.
 
 **You MUST output at least one docnerd block** when the PR has **any** user-visible impact, including:
 - New or changed CLI flags, options, or commands
@@ -224,12 +268,17 @@ def build_user_prompt(
 ) -> str:
     """Build the user prompt with PR context and existing docs."""
     matching_preview = ", ".join(matching_docs[:8]) if matching_docs else "see system prompt"
+    priority_docs = {k: v for k, v in existing_docs.items() if DOCS_PREVIEW_ONLY_SENTINEL not in v}
+    preview_docs = {k: v for k, v in existing_docs.items() if DOCS_PREVIEW_ONLY_SENTINEL in v}
+
     parts = [
         "## Task",
         "",
-        f"Matching docs to update (from search terms): {matching_preview}",
+        f"Strong path matches (search terms): {matching_preview}",
         "",
-        "Integrate the PR deeply: document what actually changed, with enough detail that a reader could use it without reading the code. Match each page's voice. Prefer concrete workflow context over shallow command lists.",
+        "Document what changed with **minimal** edits: prefer a short subsection, table row, or paragraph—not a full page rewrite. "
+        "Default **1–2** `docnerd` files, **max 3** unless the PR clearly spans separate areas. "
+        "Skim **preview** sections only to decide where a loaded (non-preview) page should carry the change.",
         "",
         "---",
         "",
@@ -237,34 +286,44 @@ def build_user_prompt(
         "",
         "---",
         "",
-        "## Existing documentation (use EXACT paths - update at least one matching doc)",
+        "## Loaded documentation — safe to edit (full or long slice; emit docnerd for these only)",
         "",
     ]
 
-    # Put matching docs first so they're prominent
+    shown_pri: set[str] = set()
     for path in matching_docs:
-        if path in existing_docs:
-            parts.append(f"### {path} (MATCH - update this)")
+        if path in priority_docs:
+            parts.append(f"### {path} (MATCH — prefer updating here if it fits)")
             parts.append("```markdown")
-            parts.append(existing_docs[path])
+            parts.append(priority_docs[path])
             parts.append("```")
             parts.append("")
+            shown_pri.add(path)
 
-    for path, content in existing_docs.items():
-        if path not in matching_docs:
+    for path in sorted(priority_docs.keys()):
+        if path in shown_pri:
+            continue
+        parts.append(f"### {path}")
+        parts.append("```markdown")
+        parts.append(priority_docs[path])
+        parts.append("```")
+        parts.append("")
+
+    if preview_docs:
+        parts.append("## Preview excerpts — context only (do **not** emit docnerd for these paths)")
+        parts.append("")
+        for path in sorted(preview_docs.keys()):
             parts.append(f"### {path}")
             parts.append("```markdown")
-            parts.append(content)
+            parts.append(preview_docs[path])
             parts.append("```")
             parts.append("")
 
     parts.append(
-        "Output docnerd blocks. Use exact paths. Include full file content. "
-        "You MUST update at least one doc when the PR adds CLI options. "
-        "If you touch SUMMARY.md or any nav file, every markdown link target must exist in the existing doc list."
-        "\n\n**Fence rule:** Each file starts with a line exactly like ```docnerd:PATH (then newline). "
-        "If your markdown includes other ``` fences, start the next file with ```docnerd:OTHER_PATH — "
-        "do not assume one closing fence ends the file."
+        "Output docnerd blocks only for paths in the **safe to edit** section. Use exact paths. Full file content per block. "
+        "You MUST update at least one **safe** doc when the PR has user-visible impact. "
+        "If you touch SUMMARY.md or nav, every link target must exist in the inventory."
+        "\n\n**Fence rule:** Each file starts with ```docnerd:PATH then newline; use a new ```docnerd: line for the next file."
     )
 
     return "\n".join(parts)
@@ -291,7 +350,7 @@ def build_refine_user_prompt(
         "",
         q_lines,
         "",
-        "Revise the docs so a public reader gets clear, PR-accurate answers. Output full file content in docnerd blocks for each file you change.",
+        "Revise with **small** diffs: answer the questions without expanding scope. Output full file content in docnerd blocks only for files you actually change (prefer ≤2 files).",
         "",
         "## Task",
         "",
@@ -320,7 +379,7 @@ def build_refine_user_prompt(
 
     parts.append(
         "Output docnerd blocks with complete file content for every file you change. "
-        "If you touch SUMMARY.md or nav, every link target must exist in the repo doc set."
+        "Keep the change set small. If you touch SUMMARY.md or nav, every link target must exist in the repo doc set."
     )
 
     return "\n".join(parts)
@@ -438,6 +497,7 @@ class DocGenerator:
         nav_structure: str = "(no nav)",
         allow_new_files: bool = True,
         review_loop: dict | None = None,
+        all_doc_paths: list[str] | None = None,
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -447,6 +507,7 @@ class DocGenerator:
             target_branch: Target docs branch (e.g. core/v7.1)
             existing_docs: Dict of path -> content for existing docs (required)
             nav_structure: MkDocs nav structure text
+            all_doc_paths: All .md paths under docs_dir (for inventory); defaults to loaded keys
 
         Returns:
             List of DocEdit (path, content, is_new)
@@ -464,6 +525,9 @@ class DocGenerator:
         if matching_docs:
             logger.info("Matching docs for writer: %s", matching_docs[:12])
 
+        inventory_paths = list(all_doc_paths) if all_doc_paths else sorted(existing_paths)
+        preview_blocked = preview_only_paths(existing_docs)
+
         system_prompt = build_system_prompt(
             self.rules_text,
             target_branch,
@@ -472,6 +536,7 @@ class DocGenerator:
             search_terms,
             matching_docs,
             allow_new_files=allow_new_files,
+            all_doc_paths_inventory=inventory_paths,
         )
         pr_text = format_pr_context_for_prompt(pr_context)
         user_prompt = build_user_prompt(pr_text, existing_docs, search_terms, matching_docs)
@@ -492,7 +557,9 @@ class DocGenerator:
             if hasattr(block, "text"):
                 text += block.text
 
-        edits_result = parse_docnerd_response(text, existing_paths)
+        edits_result = filter_edits_not_preview_only(
+            parse_docnerd_response(text, existing_paths), preview_blocked
+        )
         if edits_result:
             paths = [e.path for e in edits_result]
             logger.info("Claude response: %d edit(s) to %s", len(edits_result), paths)
@@ -509,7 +576,7 @@ class DocGenerator:
             from docnerd.review_loop import run_review_refinement_loop
 
             max_wall = float(review_cfg.get("max_wall_seconds", 600))
-            max_rounds = int(review_cfg.get("max_rounds", 8))
+            max_rounds = int(review_cfg.get("max_rounds", 5))
             logger.info(
                 "Starting review/refinement loop (max %.0fs wall, max %d rounds)",
                 max_wall,
@@ -528,6 +595,7 @@ class DocGenerator:
                 self.rules_text,
                 allow_new_files,
                 edits_result,
+                all_doc_paths=inventory_paths,
                 max_wall_seconds=max_wall,
                 max_rounds=max_rounds,
             )

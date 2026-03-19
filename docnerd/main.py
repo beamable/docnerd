@@ -151,25 +151,30 @@ def run(
 
     # Fetch existing docs from target repo (rank by PR terms so cli/deploy docs aren't dropped)
     search_terms_for_fetch = extract_doc_search_terms(pr_context)
+    dfc = config.get("docs_fetcher", {})
     try:
-        existing_docs, nav_structure = fetch_existing_docs(
+        existing_docs, nav_structure, all_doc_paths = fetch_existing_docs(
             target_repo,
             ref=target_branch,
-            max_files=config.get("docs_fetcher", {}).get("max_files", 80),
-            max_content_per_file=config.get("docs_fetcher", {}).get("max_content_per_file", 8000),
+            max_priority_files=dfc.get("max_priority_files", dfc.get("max_files", 50)),
+            max_content_per_file=dfc.get("max_content_per_file", 6000),
+            max_secondary_files=dfc.get("max_secondary_files", 100),
+            secondary_content_per_file=dfc.get("secondary_content_per_file", 2000),
             prioritize_terms=search_terms_for_fetch,
         )
     except Exception as e:
         logger.warning("Could not fetch existing docs: %s. Proceeding without.", e)
         existing_docs = {}
         nav_structure = "(could not fetch)"
+        all_doc_paths = []
 
     if not existing_docs:
         logger.warning("No existing docs found in target repo. Doc generation may create new files.")
     else:
         logger.info(
-            "Loaded %d doc file(s) for generation (prioritize_terms count=%d)",
+            "Loaded %d doc file(s) with content (%d total .md paths in repo); prioritize_terms=%d",
             len(existing_docs),
+            len(all_doc_paths),
             len(search_terms_for_fetch),
         )
 
@@ -187,6 +192,7 @@ def run(
             nav_structure=nav_structure,
             allow_new_files=allow_new,
             review_loop=config.get("doc_review_loop", {}),
+            all_doc_paths=all_doc_paths,
         )
     except Exception as e:
         logger.exception("Doc generation failed")

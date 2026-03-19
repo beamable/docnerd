@@ -51,3 +51,9 @@ integration:
   preserve_existing_structure: true
   match_existing_style: true
   add_to_existing_sections: true  # Prefer adding to existing sections over creating new ones
+
+# Scope per run (avoid touching many pages or full rewrites)
+scope:
+  default: "Update 1–2 doc pages when possible; at most 3 unless the PR clearly spans separate major areas"
+  prefer: "Surgical edits (short subsection, table row, or paragraph)—not whole-page rewrites"
+  cross_link: "One canonical explanation; elsewhere use a single sentence + link if needed"

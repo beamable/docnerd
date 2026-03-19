@@ -77,7 +77,11 @@ def test_run_trigger_path_calls_fetch_and_extract_terms_without_error(
             }
         ],
     )
-    mock_fetch_existing_docs.return_value = ({"docs/cli/guide.md": "# Guide\n"}, "(nav)")
+    mock_fetch_existing_docs.return_value = (
+        {"docs/cli/guide.md": "# Guide\n"},
+        "(nav)",
+        ["docs/cli/guide.md"],
+    )
 
     gen = MagicMock()
     gen.generate.return_value = []
@@ -101,5 +105,6 @@ def test_run_trigger_path_calls_fetch_and_extract_terms_without_error(
     assert kwargs["prioritize_terms"], "search terms should be non-empty for this PR context"
     mock_doc_generator_class.assert_called_once()
     gen.generate.assert_called_once()
+    assert gen.generate.call_args.kwargs.get("all_doc_paths") == ["docs/cli/guide.md"]
     # No docs PR when generate returns []
     mock_create_docs_pr.assert_not_called()

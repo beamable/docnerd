@@ -24,13 +24,17 @@ allow_new_files: false
 doc_review_loop:
   enabled: true
   max_wall_seconds: 600   # stop entire loop after 10 minutes
-  max_rounds: 8         # max review + refine cycles
+  max_rounds: 5         # max review + refine cycles
 
 # Docs fetcher limits (when loading from target repo)
 docs_fetcher:
-  max_files: 50
-  max_content_per_file: 8000
+  max_priority_files: 50   # alias: max_files (deprecated)
+  max_content_per_file: 6000
+  max_secondary_files: 100   # more paths as short previews (context only; not editable bodies)
+  secondary_content_per_file: 2000
 ```
+
+- **`docs_fetcher`** — Lists **all** `.md` paths under `docs_dir` for the model (inventory). Top-ranked paths (by PR search terms) load **full/long** content up to `max_content_per_file`. Additional paths load **short excerpts** only (`max_secondary_files` × `secondary_content_per_file`); the writer must not emit `docnerd` for those preview-only paths.
 
 - **`allow_new_files`** — When `false`, docNerd will only edit existing files. Any new-file suggestions from Claude are filtered out. Default: `true`.
 
@@ -66,9 +70,9 @@ Edit this file in your **source repo** (in `rules/`) to match your docs workflow
 
 ## How It Works
 
-1. docNerd fetches `mkdocs.yml` and all `.md` files from the target branch.
+1. docNerd fetches `mkdocs.yml`, lists every `.md` under `docs_dir`, and loads **priority** bodies plus **secondary** preview excerpts.
 
-2. It passes the PR diff, existing doc content, and nav structure to Claude.
+2. It passes the PR diff, loaded doc bodies (split into editable vs preview), the full path inventory, and nav structure to Claude.
 
 3. The system prompt instructs Claude to:
    - First fix invalidated docs

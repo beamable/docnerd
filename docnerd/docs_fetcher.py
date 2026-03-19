@@ -81,6 +81,16 @@ def _prioritize_md_paths(
     return ordered[:max_files]
 
 
+# Substring used to detect preview-tier docs (split prompts; do not docnerd these when present).
+DOCS_PREVIEW_ONLY_SENTINEL = "truncated preview — context only"
+
+# Appended to truncated secondary-tier docs so the model does not emit full-file replacements blind.
+_PREVIEW_ONLY_TAIL = (
+    f"\n\n---\n*[docnerd: {DOCS_PREVIEW_ONLY_SENTINEL}; "
+    "do **not** output a docnerd block for this path]*\n"
+)
+
+
 def _get_file_content(repo: Repository, path: str, ref: str) -> str:
     """Get file content as string."""
     try:
@@ -95,34 +105,62 @@ def _get_file_content(repo: Repository, path: str, ref: str) -> str:
 def fetch_existing_docs(
     repo: Repository,
     ref: str,
-    max_files: int = 50,
-    max_content_per_file: int = 8000,
+    max_files: int | None = None,
+    max_priority_files: int | None = None,
+    max_content_per_file: int = 6000,
+    max_secondary_files: int = 100,
+    secondary_content_per_file: int = 2000,
     prioritize_terms: list[str] | None = None,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], str, list[str]]:
     """
     Fetch existing docs from the target repo.
 
+    - Lists **all** markdown paths under docs_dir (returned as the third tuple element).
+    - **Priority** tier: top-ranked paths (PR terms), each up to max_content_per_file chars.
+    - **Secondary** tier: next batch of paths with shorter excerpts for **context only**
+      (marked so the writer must not emit docnerd for those paths when truncated).
+
     Args:
-        prioritize_terms: Substrings (e.g. from the source PR) used to rank which .md files
-            to load when max_files is lower than the total count. Avoids keeping only the first
-            files alphabetically and missing cli/deploy guides.
+        max_files: Deprecated; use max_priority_files. If set, used when max_priority_files is None.
+        max_priority_files: How many paths get the primary (longer) content budget.
+        prioritize_terms: Substrings from the source PR used to rank paths.
 
     Returns:
-        (dict of path -> content, nav_structure_text)
+        (path -> content, nav_structure_text, all_markdown_paths_sorted)
     """
     config = get_mkdocs_config(repo, ref)
     docs_dir = get_docs_dir(config)
     nav_text = get_nav_structure(config)
 
-    md_files = _list_md_files(repo, docs_dir, ref)
-    md_files = _prioritize_md_paths(md_files, prioritize_terms, max_files)
+    all_md = sorted(_list_md_files(repo, docs_dir, ref))
+    pri_n = max_priority_files if max_priority_files is not None else (max_files if max_files is not None else 50)
+    ordered = _prioritize_md_paths(all_md, prioritize_terms, len(all_md))
 
     docs: dict[str, str] = {}
-    for path in md_files:
+    for path in ordered[:pri_n]:
         content = _get_file_content(repo, path, ref)
-        if content:
-            docs[path] = content[:max_content_per_file] + (
-                "\n... (truncated)" if len(content) > max_content_per_file else ""
+        if not content:
+            continue
+        cap = max_content_per_file
+        if len(content) > cap:
+            docs[path] = content[:cap] + "\n... (truncated)"
+        else:
+            docs[path] = content
+
+    sec_end = pri_n + max(0, max_secondary_files)
+    for path in ordered[pri_n:sec_end]:
+        if path in docs:
+            continue
+        content = _get_file_content(repo, path, ref)
+        if not content:
+            continue
+        if len(content) <= secondary_content_per_file:
+            docs[path] = content
+        else:
+            docs[path] = (
+                content[:secondary_content_per_file]
+                + "\n... (truncated)"
+                + _PREVIEW_ONLY_TAIL
             )
 
-    return docs, nav_text
+    return docs, nav_text, all_md

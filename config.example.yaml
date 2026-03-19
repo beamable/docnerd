@@ -30,9 +30,13 @@ branch_prefix: docnerd
 
 # Docs fetcher (when loading existing docs from target repo)
 docs_fetcher:
-  # Paths are ranked by PR search terms before capping (not raw A–Z) so cli/deploy docs load
-  max_files: 80
-  max_content_per_file: 8000
+  # Paths are ranked by PR search terms before capping (not raw A–Z) so cli/deploy docs load.
+  # max_files is a deprecated alias for max_priority_files.
+  max_priority_files: 50
+  max_content_per_file: 6000
+  # Additional paths get short excerpts only (full inventory still listed in the system prompt)
+  max_secondary_files: 100
+  secondary_content_per_file: 2000
 
 # Doc generation behavior
 # allow_new_files: true = may create new files when no existing doc fits (default)
@@ -44,7 +48,7 @@ allow_new_files: true
 doc_review_loop:
   enabled: true
   max_wall_seconds: 600 # 10 minutes total wall clock for the whole loop
-  max_rounds: 8 # max reviewer+refine cycles
+  max_rounds: 5 # max reviewer+refine cycles
 
 # PR analysis - fetch full file content from base branch (not just diff)
 pr_analysis:
