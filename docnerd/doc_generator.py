@@ -1,5 +1,6 @@
 """Generate and edit documentation using Claude."""
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -190,10 +191,21 @@ Search terms from PR: {terms_str}
 
 Only output nothing for pure refactors, comments-only, or generated code with zero behavioral change.
 
-## Output format
-For each file you edit, output:
-```docnerd:path/to/existing/file.md
-<full file content with your edits>
+## Output format (machine-parsed — follow exactly)
+For **each** file you edit, output one block. The opening line must match this pattern (case-insensitive): three backticks, `docnerd`, colon, then the **exact** repo-relative path, then a newline. Then the **entire** markdown file. Then optionally a closing line of three backticks.
+
+**Important:** Your markdown will often contain other ``` code fences. That is fine. The **next** edited file must start with a **new** line ` ```docnerd:other/path.md` — the parser uses that to find where the previous file ends. Do not rely on a single closing ``` before the next file.
+
+Example (two files):
+```docnerd:docs/cli/foo.md
+# Title
+```csharp
+example();
+```
+More prose.
+```docnerd:docs/cli/bar.md
+# Second file
+...
 ```
 
 - Use EXACT paths from the existing doc list
@@ -250,6 +262,9 @@ def build_user_prompt(
         "Output docnerd blocks. Use exact paths. Include full file content. "
         "You MUST update at least one doc when the PR adds CLI options. "
         "If you touch SUMMARY.md or any nav file, every markdown link target must exist in the existing doc list."
+        "\n\n**Fence rule:** Each file starts with a line exactly like ```docnerd:PATH (then newline). "
+        "If your markdown includes other ``` fences, start the next file with ```docnerd:OTHER_PATH — "
+        "do not assume one closing fence ends the file."
     )
 
     return "\n".join(parts)
@@ -311,6 +326,9 @@ def build_refine_user_prompt(
     return "\n".join(parts)
 
 
+_DOCNERD_OPEN = re.compile(r"(?i)```\s*docnerd:\s*([^\n\r]+?)\s*\r?\n")
+
+
 def parse_docnerd_response(
     response_text: str,
     existing_paths: set[str],
@@ -318,23 +336,82 @@ def parse_docnerd_response(
     """
     Parse Claude's response to extract file edits.
     Marks as is_new=False for paths that existed.
+
+    Uses **next-block** boundaries: each edit runs from `` ```docnerd:path`` through the
+    character before the next `` ```docnerd:`` (or EOF). This avoids the classic bug where
+    ``(.*?)``` `` stops at the first ``` inside markdown content (code fences).
     """
     edits: list[DocEdit] = []
-    # Allow optional whitespace after docnerd: and before newline (models vary)
-    patterns = [
-        re.compile(r"```docnerd:\s*([^\n\r]+?)\s*\r?\n(.*?)```", re.DOTALL),
-        re.compile(r"```\s*docnerd:\s*([^\n\r]+?)\s*\r?\n(.*?)```", re.DOTALL),
-    ]
     seen_paths: set[str] = set()
-    for pattern in patterns:
-        for match in pattern.finditer(response_text):
-            path = match.group(1).strip()
-            content = match.group(2).strip()
-            if path and content and path not in seen_paths:
-                seen_paths.add(path)
-                is_new = path not in existing_paths
-                edits.append(DocEdit(path=path, content=content, is_new=is_new))
+    matches = list(_DOCNERD_OPEN.finditer(response_text))
+    for i, m in enumerate(matches):
+        path = m.group(1).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(response_text)
+        chunk = response_text[start:end]
+        chunk = re.sub(r"\r?\n```\s*$", "", chunk.rstrip())
+        chunk = chunk.strip()
+        if path and chunk and path not in seen_paths:
+            seen_paths.add(path)
+            is_new = path not in existing_paths
+            edits.append(DocEdit(path=path, content=chunk, is_new=is_new))
 
+    if not edits:
+        edits = _parse_docnerd_json_payloads(response_text, existing_paths)
+
+    return edits
+
+
+def _extract_json_fence_bodies(text: str) -> list[str]:
+    """Return raw JSON strings inside ```json ... ``` fences (handles braces inside strings)."""
+    bodies: list[str] = []
+    pos = 0
+    while pos < len(text):
+        m = re.search(r"```(?:json)?\s*\n", text[pos:], re.IGNORECASE)
+        if not m:
+            break
+        start = pos + m.end()
+        m2 = re.search(r"\n```\s*(?:\n|$)", text[start:])
+        if not m2:
+            break
+        bodies.append(text[start : start + m2.start()])
+        pos = start + m2.end()
+    return bodies
+
+
+def _parse_docnerd_json_payloads(response_text: str, existing_paths: set[str]) -> list[DocEdit]:
+    """Fallback: JSON object with array of {path, content} inside a ```json fence."""
+    edits: list[DocEdit] = []
+    seen_paths: set[str] = set()
+    for raw in _extract_json_fence_bodies(response_text):
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        items: list[dict] | None = None
+        for key in ("docnerd_files", "docnerd_edits", "updates", "files"):
+            val = data.get(key) if isinstance(data, dict) else None
+            if isinstance(val, list):
+                items = val
+                break
+        if not items:
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "")).strip()
+            content = item.get("content")
+            if not path or not isinstance(content, str) or not content.strip():
+                continue
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            edits.append(
+                DocEdit(path=path, content=content.strip(), is_new=path not in existing_paths)
+            )
     return edits
 
 
@@ -421,6 +498,11 @@ class DocGenerator:
             logger.info("Claude response: %d edit(s) to %s", len(edits_result), paths)
         else:
             logger.info("Claude response: no docnerd blocks parsed (raw length %d chars)", len(text))
+            if re.search(r"(?i)docnerd", text):
+                logger.warning(
+                    "Response mentions docnerd but parser found no edits; snippet: %r",
+                    text[:400].replace("\n", "\\n"),
+                )
 
         review_cfg = review_loop if review_loop is not None else {}
         if review_cfg.get("enabled", True) and edits_result:
