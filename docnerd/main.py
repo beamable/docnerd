@@ -100,8 +100,15 @@ def run(
         _comment(pr, f"Here is the link to the Doc changes: {existing_pr_url}")
         return 0
 
-    # Analyze PR
-    pr_context = analyze_pr(pr)
+    # Analyze PR (fetch full file contents from base branch for context)
+    pr_analysis_config = config.get("pr_analysis", {})
+    pr_context = analyze_pr(
+        pr,
+        repo=source_repo,
+        fetch_full_contents=pr_analysis_config.get("fetch_full_contents", True),
+        max_files=pr_analysis_config.get("max_files", 30),
+        max_content_per_file=pr_analysis_config.get("max_content_per_file", 12000),
+    )
 
     # LLM config
     llm_config = config.get("llm", {})

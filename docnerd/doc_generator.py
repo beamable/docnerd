@@ -43,12 +43,13 @@ Target branch: {target_branch}
 ## CRITICAL RULES - follow this order
 
 1. **INVALIDATION FIRST**: Does the PR change/remove something that makes existing docs wrong?
-   - API changes, config changes, behavior changes, deprecations
+   - API changes, CLI/command changes (new flags like --max-parallel-count), config changes, behavior changes, deprecations
    - If yes: EDIT the affected existing doc(s). Fix the incorrect info. Preserve the rest.
 
 2. **ADD CONTEXT**: Does the PR add information that belongs in an existing doc?
-   - New options, examples, caveats, migration notes
-   - If yes: ADD to the relevant existing doc. Find the right section. Don't create new files.
+   - New CLI flags/options, new API params, examples, caveats, migration notes
+   - CLI changes (e.g. beam deploy plan, beam build) ALWAYS need doc updates - find the deploy/CLI/build doc and add the new option
+   - If yes: ADD to the relevant existing doc. Find the right section. Search for related docs (deploy, CLI, build, etc.). Don't create new files.
 
 3. **NEW FILES - RARELY**: Only create a new file if:
    - The PR introduces a major new feature/concept with NO existing doc to add to
@@ -63,7 +64,8 @@ For each file you edit, output:
 
 - Use EXACT paths from the existing doc list above
 - Output the COMPLETE file content (preserve unchanged parts)
-- If no doc changes are needed, output nothing (no docnerd blocks)
+- If the PR adds CLI flags, new options, or interface changes: you MUST find a relevant doc and add them. Do NOT output nothing for interface changes.
+- Only output nothing if the PR has NO user-facing changes (e.g. internal refactors, generated code only)
 - Do NOT create files like docs/new-feature.md unless the PR truly warrants a new top-level page
 
 {rules_text}
@@ -81,7 +83,10 @@ def build_user_prompt(
         "1. Read the PR below.",
         "2. Identify which EXISTING docs (if any) are INVALIDATED by these changes.",
         "3. Identify what NEW CONTEXT should be added to EXISTING docs.",
-        "4. Only if the PR introduces a major new feature with no existing doc: consider a new file.",
+        "4. CLI/command changes (new flags, options) ALWAYS need documentation - search for deploy, CLI, build, or command docs.",
+        "5. Only if the PR introduces a major new feature with no existing doc: consider a new file.",
+        "",
+        "IMPORTANT: If the PR adds new CLI flags or command options, you MUST find a relevant doc and add them. Do not conclude 'no changes needed' for interface changes.",
         "",
         "Output ONLY edits to existing files, or additions to existing files. Prefer editing over creating.",
         "",

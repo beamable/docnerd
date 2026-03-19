@@ -18,6 +18,7 @@ create_new_files:
 # Invalidation detection - what PR changes should trigger doc updates
 invalidation_triggers:
   - "API signature changes (params, return values, removal)"
+  - "CLI/command changes - new flags, options, or arguments (e.g. --max-parallel-count)"
   - "Config option changes (new, removed, renamed)"
   - "Behavior changes that affect how users use the feature"
   - "Deprecations or removals"
