@@ -5,24 +5,31 @@
 priority:
   1: "Fix invalidated docs - if the PR changes/removes something that makes existing docs wrong, update those docs"
   2: "Add context to existing docs - if the PR adds info that belongs in an existing page, add it there"
-  3: "Create new files - ONLY when the PR introduces a major new feature/topic with no existing doc to add to"
+  3: "Create new files - ONLY when no existing doc relates. Be stingy: prefer adding to existing docs."
 
-# When to create new files (very restrictive)
+# When to create new files (stingy - only when nothing else fits)
 create_new_files:
-  allowed: false  # Default: do not create new files
-  exceptions:
-    - "PR introduces a major new API, feature, or concept with no existing doc"
-    - "PR adds a new top-level section that warrants its own page"
-  require_justification: true  # Must explain why a new file is needed
+  default: prefer_edit  # Always try existing docs first
+  only_when:
+    - "No existing doc covers the topic or command"
+    - "The change introduces a distinct new concept with no natural home"
+  never_when:
+    - "An existing doc covers deployment, CLI, build, or the same feature area"
 
 # Invalidation detection - what PR changes should trigger doc updates
 invalidation_triggers:
   - "API signature changes (params, return values, removal)"
-  - "CLI/command changes - new flags, options, or arguments (e.g. --max-parallel-count)"
+  - "CLI/command changes - new flags, options, or arguments"
   - "Config option changes (new, removed, renamed)"
   - "Behavior changes that affect how users use the feature"
   - "Deprecations or removals"
   - "New required steps or changed workflows"
+
+# Voice and style
+voice:
+  tone: "curt, succinct, powerful"
+  explain_value: true  # Explain why the change matters, not just what it does
+  match_existing: true  # Mirror the voice and style of the doc you're editing
 
 # Integration with existing docs
 integration:

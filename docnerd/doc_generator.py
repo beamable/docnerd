@@ -1,5 +1,6 @@
 """Generate and edit documentation using Claude."""
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,8 @@ from anthropic import Anthropic
 
 from docnerd.analyzer import PRContext, extract_doc_search_terms, format_pr_context_for_prompt
 from docnerd.rules_engine import format_rules_for_prompt, load_rules
+
+logger = logging.getLogger("docnerd.doc_generator")
 
 
 @dataclass
@@ -41,11 +44,20 @@ def build_system_prompt(
     existing_doc_paths: list[str],
     search_terms: list[str],
     matching_docs: list[str],
+    allow_new_files: bool = True,
 ) -> str:
     """Build the system prompt with strict doc generation rules."""
     paths_list = "\n".join(f"- {p}" for p in existing_doc_paths[:80])
     terms_str = ", ".join(search_terms) if search_terms else "(none extracted)"
     matching_list = "\n".join(f"- {p}" for p in matching_docs) if matching_docs else "(none)"
+
+    new_files_guidance = ""
+    if not allow_new_files:
+        new_files_guidance = """
+**CRITICAL - new files are disabled:** You may ONLY edit files from the existing list above. Do NOT add links, nav items, or references to files that do not exist. If you add a link in SUMMARY.md or another nav file to a file you would create, that link will be broken because new files are filtered out. Only link to existing docs."""
+    elif allow_new_files:
+        new_files_guidance = """
+**New files:** Only create a new file when no existing doc relates. Be stingy—prefer adding to existing docs. If an existing doc covers deployment, CLI, build, or the same feature area, add there instead."""
 
     return f"""You are a technical documentation maintainer for an MkDocs site. Your job is to integrate PR changes into EXISTING documentation.
 
@@ -58,6 +70,7 @@ Target branch: {target_branch}
 
 ## Existing doc files (use EXACT paths from this list)
 {paths_list}
+{new_files_guidance}
 
 ## REQUIRED: Docs you MUST update (pre-computed matches)
 
@@ -66,7 +79,13 @@ Search terms from PR: {terms_str}
 **These docs match and MUST be updated** (path contains deploy, plan, build, cli, command, etc.):
 {matching_list}
 
-**Your task:** Add the new option/flag to at least one of the docs above. If the PR adds --max-parallel-count to beam deploy plan/release/build, add it to the deployment or CLI command docs. Prefer docs/cli/ or docs/cli/commands/ or docs/cli/guides/ms-deployment.md.
+**Your task:** Add the new option/flag to at least one of the docs above. Prefer docs/cli/, docs/cli/commands/, or deployment guides.
+
+**Writing style:**
+- Curt, succinct, powerful. No fluff.
+- Explain the *value* of the change—why it matters, not just what it does. (e.g. "Speeds up parallel builds" not just "Sets max parallel count")
+- Match the existing voice and tone of each doc you edit.
+- One line per option when possible; expand only when necessary.
 
 **You MUST output at least one docnerd block** when the PR adds CLI flags, options, or config. Do NOT output nothing.
 
@@ -97,7 +116,7 @@ def build_user_prompt(
         "",
         f"Matching docs to update (from search terms): {matching_preview}",
         "",
-        "Add the new option/flag to each relevant doc. Include: flag name (e.g. --max-parallel-count), default value, and what it does.",
+        "Add the new option/flag to each relevant doc. Include: flag name, default, and the *value* it delivers (why it matters). Keep it curt—match the doc's existing voice.",
         "",
         "---",
         "",
@@ -175,6 +194,7 @@ class DocGenerator:
         target_branch: str,
         existing_docs: dict[str, str],
         nav_structure: str = "(no nav)",
+        allow_new_files: bool = True,
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -199,9 +219,15 @@ class DocGenerator:
             list(existing_paths),
             search_terms,
             matching_docs,
+            allow_new_files=allow_new_files,
         )
         pr_text = format_pr_context_for_prompt(pr_context)
         user_prompt = build_user_prompt(pr_text, existing_docs, search_terms, matching_docs)
+
+        logger.info("=== System prompt (to Claude) ===")
+        logger.info("%s", system_prompt)
+        logger.info("=== User prompt (to Claude) ===")
+        logger.info("%s", user_prompt)
 
         response = self.client.messages.create(
             model=self.model,
@@ -214,5 +240,8 @@ class DocGenerator:
         for block in response.content:
             if hasattr(block, "text"):
                 text += block.text
+
+        logger.info("=== Claude response ===")
+        logger.info("%s", text)
 
         return parse_docnerd_response(text, existing_paths)

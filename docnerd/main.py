@@ -140,6 +140,7 @@ def run(
         return 1
 
     # Generate docs - resolve rules_path from workspace (source repo), fallback to action's rules
+    allow_new = config.get("allow_new_files", True)
     rules_path = config.get("rules_path", "rules")
     workspace = Path.cwd()
     rules_full = Path(rules_path) if Path(rules_path).is_absolute() else workspace / rules_path
@@ -176,6 +177,7 @@ def run(
             target_branch,
             existing_docs=existing_docs,
             nav_structure=nav_structure,
+            allow_new_files=allow_new,
         )
     except Exception as e:
         logger.exception("Doc generation failed")
@@ -195,7 +197,6 @@ def run(
         return 0
 
     # Optionally filter out new files (config: allow_new_files: false)
-    allow_new = config.get("allow_new_files", True)
     if not allow_new:
         edits = [e for e in edits if not e.is_new]
         if not edits:

@@ -34,8 +34,9 @@ docs_fetcher:
   max_content_per_file: 8000
 
 # Doc generation behavior
+# allow_new_files: true = may create new files when no existing doc fits (default)
 # allow_new_files: false = only edit existing docs, never create new files
-allow_new_files: false
+allow_new_files: true
 
 # PR analysis - fetch full file content from base branch (not just diff)
 pr_analysis:
