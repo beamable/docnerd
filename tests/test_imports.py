@@ -27,6 +27,7 @@ def test_import_all_modules():
         make_work_branch_name,
     )
     from docnerd.rules_engine import load_rules, format_rules_for_prompt
+    from docnerd.review_loop import parse_reviewer_response, apply_edits_to_draft
     from docnerd.main import run, main
 
 

@@ -38,6 +38,13 @@ docs_fetcher:
 # allow_new_files: false = only edit existing docs, never create new files
 allow_new_files: true
 
+# Reviewer agent: after initial docs, a second pass reviews for public-user clarity;
+# the writer refines until satisfied or limits hit.
+doc_review_loop:
+  enabled: true
+  max_wall_seconds: 600 # 10 minutes total wall clock for the whole loop
+  max_rounds: 8 # max reviewer+refine cycles
+
 # PR analysis - fetch full file content from base branch (not just diff)
 pr_analysis:
   fetch_full_contents: true

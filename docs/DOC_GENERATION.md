@@ -20,6 +20,12 @@ docNerd is designed to **integrate with existing docs** rather than create new f
 # Only edit existing docs; never create new files
 allow_new_files: false
 
+# Reviewer loop (default on): second agent reviews drafts for public-user clarity
+doc_review_loop:
+  enabled: true
+  max_wall_seconds: 600   # stop entire loop after 10 minutes
+  max_rounds: 8         # max review + refine cycles
+
 # Docs fetcher limits (when loading from target repo)
 docs_fetcher:
   max_files: 50
@@ -27,6 +33,8 @@ docs_fetcher:
 ```
 
 - **`allow_new_files`** — When `false`, docNerd will only edit existing files. Any new-file suggestions from Claude are filtered out. Default: `true`.
+
+- **`doc_review_loop`** — After the initial writer pass, a reviewer model checks whether the docs explain the PR for a public user. If not, it emits JSON questions; the writer refines until the reviewer returns `satisfied`, or `max_wall_seconds` / `max_rounds` is hit. Set `enabled: false` to skip (single pass only).
 
 ### Rules: `rules/doc_generation.yaml`
 

@@ -178,6 +178,7 @@ def run(
             existing_docs=existing_docs,
             nav_structure=nav_structure,
             allow_new_files=allow_new,
+            review_loop=config.get("doc_review_loop", {}),
         )
     except Exception as e:
         logger.exception("Doc generation failed")

@@ -79,13 +79,16 @@ Search terms from PR: {terms_str}
 **These docs match and MUST be updated** (path contains deploy, plan, build, cli, command, etc.):
 {matching_list}
 
-**Your task:** Add the new option/flag to at least one of the docs above. Prefer docs/cli/, docs/cli/commands/, or deployment guides.
+**Your task:** Integrate the PR into the docs above. Prefer docs/cli/, docs/cli/commands/, or deployment guides. Update the pages that best explain the *changed* behavior.
 
-**Writing style:**
-- Curt, succinct, powerful. No fluff.
-- Explain the *value* of the change—why it matters, not just what it does. (e.g. "Speeds up parallel builds" not just "Sets max parallel count")
-- Match the existing voice and tone of each doc you edit.
-- One line per option when possible; expand only when necessary.
+**Depth (avoid superficial docs):**
+- Ground everything in the PR: use exact command names, flags, and behavior from the diff and file content—never invent options or links.
+- Do not write generic command glossaries (e.g. "`beam local run` — starts services") unless you add *specific* detail from the PR: defaults, prerequisites, env vars, typical sequence, or what changed vs before.
+- Explain *why* someone runs this in a real workflow, not marketing one-liners.
+- For new flags/options: default, effect, and when to tune it (who benefits, tradeoffs).
+- Only link to paths that appear in the existing doc file list above. Never add `[text](path.md)` to files that do not exist.
+
+**Voice:** Match the existing page (headings, bullets vs prose). Be dense and useful—no filler—but **substance beats brevity** when the PR warrants a short paragraph or a worked example.
 
 **You MUST output at least one docnerd block** when the PR adds CLI flags, options, or config. Do NOT output nothing.
 
@@ -116,7 +119,7 @@ def build_user_prompt(
         "",
         f"Matching docs to update (from search terms): {matching_preview}",
         "",
-        "Add the new option/flag to each relevant doc. Include: flag name, default, and the *value* it delivers (why it matters). Keep it curt—match the doc's existing voice.",
+        "Integrate the PR deeply: document what actually changed, with enough detail that a reader could use it without reading the code. Match each page's voice. Prefer concrete workflow context over shallow command lists.",
         "",
         "---",
         "",
@@ -146,7 +149,65 @@ def build_user_prompt(
             parts.append("")
 
     parts.append(
-        "Output docnerd blocks. Use exact paths. Include full file content. You MUST update at least one doc when the PR adds CLI options."
+        "Output docnerd blocks. Use exact paths. Include full file content. "
+        "You MUST update at least one doc when the PR adds CLI options. "
+        "If you touch SUMMARY.md or any nav file, every markdown link target must exist in the existing doc list."
+    )
+
+    return "\n".join(parts)
+
+
+def build_refine_user_prompt(
+    pr_context_text: str,
+    draft_docs: dict[str, str],
+    reviewer_questions: list[str],
+    search_terms: list[str],
+    matching_docs: list[str],
+    touched_paths: set[str],
+) -> str:
+    """User prompt for a refinement pass after reviewer feedback."""
+    matching_preview = ", ".join(matching_docs[:8]) if matching_docs else "see system prompt"
+    q_lines = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(reviewer_questions))
+
+    # Include draft content for touched + matching docs (same coverage as initial pass)
+    paths_to_show: set[str] = set(touched_paths)
+    paths_to_show.update(matching_docs)
+
+    parts = [
+        "## Reviewer feedback — address every point in the documentation",
+        "",
+        q_lines,
+        "",
+        "Revise the docs so a public reader gets clear, PR-accurate answers. Output full file content in docnerd blocks for each file you change.",
+        "",
+        "## Task",
+        "",
+        f"Matching docs (search terms): {matching_preview}",
+        "",
+        "---",
+        "",
+        pr_context_text,
+        "",
+        "---",
+        "",
+        "## Current documentation draft (revise as needed; use EXACT paths)",
+        "",
+    ]
+
+    ordered = sorted(paths_to_show, key=lambda p: (0 if p in matching_docs else 1, p))
+    for path in ordered:
+        if path not in draft_docs:
+            continue
+        label = " (MATCH)" if path in matching_docs else ""
+        parts.append(f"### {path}{label}")
+        parts.append("```markdown")
+        parts.append(draft_docs[path])
+        parts.append("```")
+        parts.append("")
+
+    parts.append(
+        "Output docnerd blocks with complete file content for every file you change. "
+        "If you touch SUMMARY.md or nav, every link target must exist in the repo doc set."
     )
 
     return "\n".join(parts)
@@ -195,6 +256,7 @@ class DocGenerator:
         existing_docs: dict[str, str],
         nav_structure: str = "(no nav)",
         allow_new_files: bool = True,
+        review_loop: dict | None = None,
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -246,5 +308,39 @@ class DocGenerator:
             logger.info("Claude response: %d edit(s) to %s", len(edits_result), paths)
         else:
             logger.info("Claude response: no docnerd blocks parsed (raw length %d chars)", len(text))
+
+        review_cfg = review_loop if review_loop is not None else {}
+        if review_cfg.get("enabled", True) and edits_result:
+            from docnerd.review_loop import run_review_refinement_loop
+
+            max_wall = float(review_cfg.get("max_wall_seconds", 600))
+            max_rounds = int(review_cfg.get("max_rounds", 8))
+            logger.info(
+                "Starting review/refinement loop (max %.0fs wall, max %d rounds)",
+                max_wall,
+                max_rounds,
+            )
+            edits_result = run_review_refinement_loop(
+                self.client,
+                self.model,
+                pr_context,
+                target_branch,
+                nav_structure,
+                existing_docs,
+                existing_paths,
+                search_terms,
+                matching_docs,
+                self.rules_text,
+                allow_new_files,
+                edits_result,
+                max_wall_seconds=max_wall,
+                max_rounds=max_rounds,
+            )
+            if edits_result:
+                logger.info(
+                    "After review loop: %d final edit(s) to %s",
+                    len(edits_result),
+                    [e.path for e in edits_result],
+                )
 
         return edits_result

@@ -27,9 +27,22 @@ invalidation_triggers:
 
 # Voice and style
 voice:
-  tone: "curt, succinct, powerful"
-  explain_value: true  # Explain why the change matters, not just what it does
-  match_existing: true  # Mirror the voice and style of the doc you're editing
+  tone: "clear, confident, dense with signal—avoid marketing filler"
+  explain_value: true  # Why it matters for real workflows, not slogans
+  match_existing: true  # Mirror headings, list style, and terminology of the page you edit
+  avoid_superficial: true
+
+# Depth: what "good" looks like (not one-line glossaries)
+substance:
+  ground_in_pr: "Every claim must come from the PR (diff, code, descriptions)—do not invent flags, paths, or behavior"
+  prefer:
+    - "Concrete workflows: when a developer runs this, what problem does it solve and in what order"
+    - "Non-obvious details: defaults, env vars, prerequisites, failure modes, interaction with other commands"
+    - "Subcommands and options that actually changed—name them exactly as in code/CLI"
+  avoid:
+    - "Generic bullet lists that only restate command names ('beam local run — starts services')"
+    - "Placeholder nav links to .md files that are not in the existing doc file list"
+    - "Paragraphs that could apply to any CLI without reading the PR"
 
 # Integration with existing docs
 integration:
