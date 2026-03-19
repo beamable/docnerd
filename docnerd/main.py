@@ -91,6 +91,8 @@ def run(
 
     # Reply "working on it" (with workflow link if running in GitHub Actions)
     run_url = os.getenv("GITHUB_RUN_URL")
+    if not run_url and os.getenv("GITHUB_SERVER_URL") and os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_RUN_ID"):
+        run_url = f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/{os.getenv('GITHUB_RUN_ID')}"
     if run_url:
         _comment(pr, f"yes, working on it. [Watch the workflow]({run_url})")
     else:
