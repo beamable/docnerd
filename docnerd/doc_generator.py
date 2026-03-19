@@ -37,6 +37,78 @@ def compute_matching_docs(doc_paths: list[str], search_terms: list[str]) -> list
     return sorted(matches)
 
 
+# PR signals that imply user-facing docs even when terms do not substring-match paths
+_USER_FACING_DOC_SIGNALS = frozenset(
+    {
+        "docker",
+        "dockerfile",
+        "container",
+        "msbuild",
+        "csproj",
+        "deploy",
+        "deployment",
+        "release",
+        "build",
+        "cli",
+        "service",
+        "services",
+        "configuration",
+        "config",
+        "microservice",
+        "image",
+        "runtime",
+        "property",
+        "override",
+        "arg",
+        "dotnet",
+        "alpine",
+        "noble",
+    }
+)
+
+# Doc path substrings for configuration / deploy / CLI / microservice topics
+_DOC_PATH_FALLBACK_HINTS = (
+    "deploy",
+    "config",
+    "docker",
+    "microservice",
+    "build",
+    "cli",
+    "service",
+    "guide",
+    "ms-",
+    "project",
+    "container",
+    "command",
+    "local",
+    "beam",
+)
+
+
+def ensure_matching_docs(
+    doc_paths: list[str],
+    matching_docs: list[str],
+    search_terms: list[str],
+    *,
+    limit: int = 25,
+) -> list[str]:
+    """
+    If term matching found nothing but the PR clearly affects users (deploy, docker,
+    MSBuild, etc.), fall back to docs whose paths look like configuration / CLI / deploy.
+    """
+    if matching_docs:
+        return matching_docs
+    st = {t.lower() for t in search_terms}
+    if not st & _USER_FACING_DOC_SIGNALS:
+        return matching_docs
+    hits: list[str] = []
+    for p in doc_paths:
+        pl = p.lower()
+        if any(h in pl for h in _DOC_PATH_FALLBACK_HINTS):
+            hits.append(p)
+    return sorted(set(hits))[:limit]
+
+
 def build_system_prompt(
     rules_text: str,
     target_branch: str,
@@ -90,7 +162,12 @@ Search terms from PR: {terms_str}
 
 **Voice:** Match the existing page (headings, bullets vs prose). Be dense and useful—no filler—but **substance beats brevity** when the PR warrants a short paragraph or a worked example.
 
-**You MUST output at least one docnerd block** when the PR adds CLI flags, options, or config. Do NOT output nothing.
+**You MUST output at least one docnerd block** when the PR has **any** user-visible impact, including:
+- New or changed CLI flags, options, or commands
+- **MSBuild / .csproj properties**, Dockerfile `ARG`s, container base images, or anything that changes how `beam deploy` / `beam build` / Docker builds behave
+- Configuration or defaults that affect deployment, local dev, or microservice builds—even if the "API" is an XML property, not a CLI flag
+
+Only output nothing for pure refactors, comments-only, or generated code with zero behavioral change.
 
 ## Output format
 For each file you edit, output:
@@ -100,7 +177,7 @@ For each file you edit, output:
 
 - Use EXACT paths from the existing doc list
 - Output the COMPLETE file content (preserve unchanged parts)
-- Only output nothing if the PR has ZERO user-facing changes (pure refactors, generated code only)
+- Only output nothing if the PR has ZERO user-facing changes (pure refactors, comments-only, generated-only)
 
 {rules_text}
 """
@@ -272,7 +349,11 @@ class DocGenerator:
         """
         existing_paths = set(existing_docs.keys())
         search_terms = extract_doc_search_terms(pr_context)
-        matching_docs = compute_matching_docs(list(existing_paths), search_terms)
+        matching_docs = ensure_matching_docs(
+            list(existing_paths),
+            compute_matching_docs(list(existing_paths), search_terms),
+            search_terms,
+        )
 
         system_prompt = build_system_prompt(
             self.rules_text,

@@ -9,6 +9,7 @@ def test_import_all_modules():
     from docnerd import config
     from docnerd import rules_engine
     from docnerd.analyzer import analyze_pr, PRContext, extract_doc_search_terms, format_pr_context_for_prompt
+    from docnerd.doc_generator import ensure_matching_docs
     from docnerd.branch_validator import validate_branch
     from docnerd.comment_parser import parse_trigger, TriggerMatch
     from docnerd.doc_generator import DocGenerator, DocEdit, parse_docnerd_response

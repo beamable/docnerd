@@ -20,6 +20,8 @@ create_new_files:
 invalidation_triggers:
   - "API signature changes (params, return values, removal)"
   - "CLI/command changes - new flags, options, or arguments"
+  - "MSBuild or .csproj properties that affect builds, containers, or deploy (e.g. ContainerFamily, TargetFramework)"
+  - "Dockerfile ARG defaults, docker buildx args, or base image tag behavior"
   - "Config option changes (new, removed, renamed)"
   - "Behavior changes that affect how users use the feature"
   - "Deprecations or removals"

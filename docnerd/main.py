@@ -188,8 +188,13 @@ def run(
     if not edits:
         from docnerd.analyzer import extract_doc_search_terms
         search_terms = extract_doc_search_terms(pr_context)
-        from docnerd.doc_generator import compute_matching_docs
-        matching = compute_matching_docs(list(existing_docs.keys()), search_terms)
+        from docnerd.doc_generator import compute_matching_docs, ensure_matching_docs
+
+        matching = ensure_matching_docs(
+            list(existing_docs.keys()),
+            compute_matching_docs(list(existing_docs.keys()), search_terms),
+            search_terms,
+        )
         logger.warning(
             "Claude returned no edits. doc_count=%d search_terms=%s matching_docs=%d",
             len(existing_docs), search_terms, len(matching),

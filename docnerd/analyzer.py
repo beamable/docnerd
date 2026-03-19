@@ -113,8 +113,9 @@ def format_pr_context_for_prompt(ctx: PRContext) -> str:
 
 def extract_doc_search_terms(ctx: PRContext) -> list[str]:
     """
-    Extract search terms from PR file paths and title to help match docs.
+    Extract search terms from PR file paths, title, and body to help match docs.
     E.g. DeployArgs.cs, PlanDeploymentCommand.cs -> deploy, plan, deployment
+    Includes docker/MSBuild/csproj/container signals for configuration + deploy docs.
     """
     import re
 
@@ -122,28 +123,41 @@ def extract_doc_search_terms(ctx: PRContext) -> list[str]:
     path_keywords = [
         "deploy", "plan", "release", "build", "project", "cli", "command",
         "config", "configuration", "microservice", "editor", "api", "event",
+        # Container / MSBuild / service build (e.g. PRs that change docker build, csproj props)
+        "docker", "dockerfile", "container", "msbuild", "csproj", "service",
+        "services", "image", "runtime", "override", "property", "arg", "noble",
+        "alpine", "dotnet", "beam",
     ]
 
-    # From file paths
+    def _scan_text(blob: str) -> None:
+        low = blob.lower()
+        for kw in path_keywords:
+            if kw in low:
+                terms.add(kw)
+
+    # From file paths + PascalCase tokens (ServicesBuildCommand -> services, build, command)
     for f in ctx.files:
         path = f["filename"].lower()
-        for kw in path_keywords:
-            if kw in path:
-                terms.add(kw)
+        _scan_text(path)
         for part in re.findall(r"[A-Z][a-z]+", f["filename"]):
             terms.add(part.lower())
 
-    # From PR title (e.g. "Add --max-parallel-count flag to beam deploy plan")
-    title_lower = (ctx.title or "").lower()
-    for kw in path_keywords:
-        if kw in title_lower:
-            terms.add(kw)
-    for part in re.findall(r"\b[a-z]+\b", title_lower):
-        if len(part) > 3 and part in path_keywords:
+    _scan_text(ctx.title or "")
+    # PR body often names MSBuild properties, repro steps, and CLI commands
+    _scan_text((ctx.body or "")[:20000])
+
+    for part in re.findall(r"\b[a-z]{4,}\b", (ctx.title or "").lower()):
+        if part in path_keywords:
             terms.add(part)
 
-    # Always include these when we have deploy/build related terms
-    if any(t in terms for t in ["deploy", "plan", "release", "build"]):
-        terms.update(["deploy", "deployment", "build", "cli", "command"])
+    # Deploy / build / container work always ties back to CLI + deployment docs
+    if any(
+        t in terms
+        for t in [
+            "deploy", "plan", "release", "build", "docker", "dockerfile",
+            "container", "msbuild", "csproj", "service", "services", "microservice",
+        ]
+    ):
+        terms.update(["deploy", "deployment", "build", "cli", "command", "config", "configuration"])
 
     return sorted(terms)
