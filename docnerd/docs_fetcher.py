@@ -164,3 +164,28 @@ def fetch_existing_docs(
             )
 
     return docs, nav_text, all_md
+
+
+def fetch_doc_contents_for_paths(
+    repo: Repository,
+    ref: str,
+    paths: list[str],
+    *,
+    max_chars_per_file: int = 80_000,
+) -> dict[str, str]:
+    """
+    Load full text for each path (for per-file doc passes). Skips missing/empty files.
+    """
+    out: dict[str, str] = {}
+    for path in paths:
+        content = _get_file_content(repo, path, ref)
+        if not content:
+            continue
+        if len(content) > max_chars_per_file:
+            content = (
+                content[:max_chars_per_file]
+                + "\n\n... (truncated)\n"
+                + _PREVIEW_ONLY_TAIL
+            )
+        out[path] = content
+    return out

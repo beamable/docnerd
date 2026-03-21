@@ -10,7 +10,7 @@ from docnerd.branch_validator import validate_branch
 from docnerd.comment_parser import mentions_docnerd, parse_trigger
 from docnerd.config import load_config
 from docnerd.doc_generator import DocGenerator
-from docnerd.docs_fetcher import fetch_existing_docs
+from docnerd.docs_fetcher import fetch_doc_contents_for_paths, fetch_existing_docs
 from docnerd.github_client import get_github_client, get_pr, get_repo, post_comment
 from docnerd.pr_creator import create_docs_pr, find_existing_docs_pr
 
@@ -178,6 +178,26 @@ def run(
             len(search_terms_for_fetch),
         )
 
+    doc_generation_cfg = config.get("doc_generation", {})
+    generation_mode = doc_generation_cfg.get("mode", "phased")
+    phased_cfg = doc_generation_cfg.get("phased", {})
+    full_document_map: dict[str, str] | None = None
+    if generation_mode == "phased" and all_doc_paths:
+        try:
+            full_document_map = fetch_doc_contents_for_paths(
+                target_repo,
+                target_branch,
+                all_doc_paths,
+                max_chars_per_file=int(phased_cfg.get("per_doc_max_content_chars", 80_000)),
+            )
+            logger.info(
+                "Phased mode: loaded full text for %d / %d markdown path(s)",
+                len(full_document_map),
+                len(all_doc_paths),
+            )
+        except Exception as e:
+            logger.warning("Could not load all docs for phased mode: %s", e)
+
     try:
         generator = DocGenerator(
             api_key=api_key,
@@ -193,6 +213,9 @@ def run(
             allow_new_files=allow_new,
             review_loop=config.get("doc_review_loop", {}),
             all_doc_paths=all_doc_paths,
+            generation_mode=generation_mode,
+            full_document_map=full_document_map,
+            phased_settings=phased_cfg,
         )
     except Exception as e:
         logger.exception("Doc generation failed")

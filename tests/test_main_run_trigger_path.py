@@ -28,6 +28,7 @@ _MINIMAL_CONFIG = {
     "pr_analysis": {"max_files": 5, "fetch_full_contents": False},
     "doc_review_loop": {"enabled": False},
     "allow_new_files": True,
+    "doc_generation": {"mode": "legacy"},
 }
 
 

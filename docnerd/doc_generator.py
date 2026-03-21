@@ -11,6 +11,7 @@ from anthropic import Anthropic
 
 from docnerd.analyzer import PRContext, extract_doc_search_terms, format_pr_context_for_prompt
 from docnerd.docs_fetcher import DOCS_PREVIEW_ONLY_SENTINEL
+from docnerd.llm_context import fit_writer_prompt
 from docnerd.rules_engine import format_rules_for_prompt, load_rules
 
 logger = logging.getLogger("docnerd.doc_generator")
@@ -529,6 +530,10 @@ class DocGenerator:
         allow_new_files: bool = True,
         review_loop: dict | None = None,
         all_doc_paths: list[str] | None = None,
+        *,
+        generation_mode: str = "phased",
+        full_document_map: dict[str, str] | None = None,
+        phased_settings: dict | None = None,
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -539,10 +544,66 @@ class DocGenerator:
             existing_docs: Dict of path -> content for existing docs (required)
             nav_structure: MkDocs nav structure text
             all_doc_paths: All .md paths under docs_dir (for inventory); defaults to loaded keys
+            generation_mode: ``phased`` (default) or ``legacy`` (single monolithic Claude call)
+            full_document_map: For ``phased``: full body for every .md file to scan (from target branch)
+            phased_settings: Optional ``doc_generation.phased`` config dict
 
         Returns:
             List of DocEdit (path, content, is_new)
         """
+        if generation_mode == "legacy":
+            return self._generate_monolithic(
+                pr_context,
+                target_branch,
+                existing_docs,
+                nav_structure=nav_structure,
+                allow_new_files=allow_new_files,
+                review_loop=review_loop,
+                all_doc_paths=all_doc_paths,
+            )
+
+        if full_document_map:
+            from docnerd.phased_pipeline import run_phased_generation
+
+            paths = list(all_doc_paths) if all_doc_paths else sorted(full_document_map.keys())
+            return run_phased_generation(
+                self.client,
+                self.model,
+                self.rules_text,
+                pr_context,
+                target_branch,
+                nav_structure,
+                full_document_map,
+                paths,
+                allow_new_files,
+                review_loop,
+                phased_settings,
+            )
+
+        logger.warning(
+            "generation_mode=phased but full_document_map missing; falling back to legacy monolithic call"
+        )
+        return self._generate_monolithic(
+            pr_context,
+            target_branch,
+            existing_docs,
+            nav_structure=nav_structure,
+            allow_new_files=allow_new_files,
+            review_loop=review_loop,
+            all_doc_paths=all_doc_paths,
+        )
+
+    def _generate_monolithic(
+        self,
+        pr_context: PRContext,
+        target_branch: str,
+        existing_docs: dict[str, str],
+        nav_structure: str = "(no nav)",
+        allow_new_files: bool = True,
+        review_loop: dict | None = None,
+        all_doc_paths: list[str] | None = None,
+    ) -> list[DocEdit]:
+        """Single large writer + optional full-tree review loop (legacy)."""
         existing_paths = set(existing_docs.keys())
         search_terms = extract_doc_search_terms(pr_context)
         matching_docs = ensure_matching_docs(
@@ -570,15 +631,26 @@ class DocGenerator:
             all_doc_paths_inventory=inventory_paths,
         )
         pr_text = format_pr_context_for_prompt(pr_context)
-        user_prompt = build_user_prompt(pr_text, existing_docs, search_terms, matching_docs)
+        user_prompt, _docs_for_prompt, max_tokens = fit_writer_prompt(
+            system_prompt,
+            pr_text,
+            existing_docs,
+            build_user_prompt,
+            search_terms,
+            matching_docs,
+        )
 
         logger.info("=== Prompts (summary - source code omitted from logs) ===")
         logger.info("System prompt: %d chars", len(system_prompt))
-        logger.info("User prompt: %d chars (PR context + existing docs - not logged)", len(user_prompt))
+        logger.info(
+            "User prompt: %d chars (PR context + existing docs - not logged), max_tokens=%d",
+            len(user_prompt),
+            max_tokens,
+        )
 
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=16000,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )

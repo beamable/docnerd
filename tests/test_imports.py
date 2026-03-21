@@ -28,6 +28,8 @@ def test_import_all_modules():
         make_work_branch_name,
     )
     from docnerd.rules_engine import load_rules, format_rules_for_prompt
+    from docnerd.llm_context import compute_max_output_tokens, fit_writer_prompt
+    from docnerd.phased_pipeline import run_phased_generation
     from docnerd.review_loop import parse_reviewer_response, apply_edits_to_draft
     from docnerd.main import run, main
 

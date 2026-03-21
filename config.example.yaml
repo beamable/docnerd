@@ -43,6 +43,18 @@ docs_fetcher:
 # allow_new_files: false = only edit existing docs, never create new files
 allow_new_files: true
 
+# doc_generation.mode: phased (default) = PR narrative file, then one Claude call per .md file,
+#   adequacy check, optional expansion, then reviewer loop on proposed edits only.
+#   legacy = single monolithic writer + full-tree review (old behavior).
+doc_generation:
+  mode: phased
+  phased:
+    max_parallel_doc_calls: 4
+    per_doc_max_content_chars: 80000
+    narrative_max_tokens: 8192
+    adequacy_max_tokens: 4096
+    expansion_max_tokens: 24000
+
 # Reviewer agent: after initial docs, a second pass reviews for public-user clarity;
 # the writer refines until satisfied or limits hit.
 doc_review_loop:

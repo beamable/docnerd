@@ -17,6 +17,13 @@ from docnerd.doc_generator import (
     parse_docnerd_response,
     preview_only_paths,
 )
+from docnerd.llm_context import (
+    MIN_OUTPUT_TOKENS,
+    REVIEWER_MAX_OUTPUT,
+    WRITER_MAX_OUTPUT,
+    compute_max_output_tokens,
+    shrink_doc_values_for_budget,
+)
 
 logger = logging.getLogger("docnerd.review_loop")
 
@@ -140,12 +147,14 @@ def parse_reviewer_response(text: str) -> tuple[bool, list[str], list[dict[str, 
 
 def _reviewer_user_prompt(
     pr_text: str,
-    draft: dict[str, str],
+    display_draft: dict[str, str],
     baseline: dict[str, str],
+    label_draft: dict[str, str],
     preview_only_paths: set[str],
     *,
     max_chars_updated: int = 12000,
     max_chars_unchanged: int = 3200,
+    max_total_doc_chars: int = 120_000,
 ) -> str:
     """
     Show every loaded doc so the reviewer can judge coverage across the tree.
@@ -163,19 +172,26 @@ def _reviewer_user_prompt(
         "or suggest a **fully loaded** sibling/canonical page instead of `needs_brief_mention` on preview paths.",
         "",
     ]
-    sorted_paths = sorted(draft.keys())
-    for p in sorted_paths:
-        content = draft.get(p, "")
-        updated = baseline.get(p) != content
-        cap = max_chars_updated if updated else max_chars_unchanged
+    sorted_paths = sorted(display_draft.keys())
+    n = len(sorted_paths)
+    budget = max_total_doc_chars
+    for i, p in enumerate(sorted_paths):
+        raw = display_draft.get(p, "")
+        updated = baseline.get(p) != label_draft.get(p)
         if p in preview_only_paths:
             label = "PREVIEW ONLY (writer cannot edit this path)"
         elif updated:
             label = "UPDATED by writer"
         else:
             label = "UNCHANGED (excerpt if truncated)"
+        base_cap = max_chars_updated if updated else max_chars_unchanged
+        remaining = n - i
+        share_cap = max(200, budget // max(1, remaining))
+        cap = min(base_cap, share_cap)
+        content = raw
         if len(content) > cap:
             content = content[:cap] + "\n\n... (truncated for review context)"
+        budget -= len(content)
         parts.append(f"### {p} ({label})")
         parts.append("```markdown")
         parts.append(content)
@@ -283,21 +299,48 @@ def run_review_refinement_loop(
         if not review_paths:
             break
 
-        reviewer_user = _reviewer_user_prompt(
-            pr_text, draft, existing_docs, preview_blocked
-        )
+        review_display = dict(draft)
+        reviewer_user = ""
+        reviewer_max_tokens = REVIEWER_MAX_OUTPUT
+        for rv_attempt in range(30):
+            reviewer_user = _reviewer_user_prompt(
+                pr_text,
+                review_display,
+                existing_docs,
+                draft,
+                preview_blocked,
+            )
+            reviewer_max_tokens = compute_max_output_tokens(
+                REVIEWER_SYSTEM,
+                reviewer_user,
+                desired_max=REVIEWER_MAX_OUTPUT,
+            )
+            if reviewer_max_tokens >= MIN_OUTPUT_TOKENS:
+                if rv_attempt:
+                    logger.warning(
+                        "Shrunk reviewer draft display to fit context (%d attempt(s))",
+                        rv_attempt,
+                    )
+                break
+            tot = sum(len(v) for v in review_display.values())
+            if tot < 6_000:
+                break
+            review_display = shrink_doc_values_for_budget(
+                review_display, max(6_000, int(tot * 0.86))
+            )
         logger.info(
-            "Reviewer round %d: prompt sizes system=%d user=%d changed=%d total_loaded=%d",
+            "Reviewer round %d: prompt sizes system=%d user=%d max_tokens=%d changed=%d total_loaded=%d",
             round_idx + 1,
             len(REVIEWER_SYSTEM),
             len(reviewer_user),
+            reviewer_max_tokens,
             len(review_paths),
             len(draft),
         )
 
         resp = client.messages.create(
             model=model,
-            max_tokens=8192,
+            max_tokens=reviewer_max_tokens,
             system=REVIEWER_SYSTEM,
             messages=[{"role": "user", "content": reviewer_user}],
         )
@@ -330,25 +373,48 @@ def run_review_refinement_loop(
             logger.info("Review loop stopped before refine: wall clock limit")
             break
 
-        refine_user = build_refine_user_prompt(
-            pr_text,
-            draft,
-            questions,
-            search_terms,
-            matching_docs,
-            touched_paths,
-            file_assessments=file_assessments,
-        )
+        refine_display = dict(draft)
+        refine_user = ""
+        refine_max_tokens = WRITER_MAX_OUTPUT
+        for rf_attempt in range(30):
+            refine_user = build_refine_user_prompt(
+                pr_text,
+                refine_display,
+                questions,
+                search_terms,
+                matching_docs,
+                touched_paths,
+                file_assessments=file_assessments,
+            )
+            refine_max_tokens = compute_max_output_tokens(
+                writer_system,
+                refine_user,
+                desired_max=WRITER_MAX_OUTPUT,
+            )
+            if refine_max_tokens >= MIN_OUTPUT_TOKENS:
+                if rf_attempt:
+                    logger.warning(
+                        "Shrunk refine draft to fit context (%d attempt(s))",
+                        rf_attempt,
+                    )
+                break
+            tot = sum(len(v) for v in refine_display.values())
+            if tot < 8_000:
+                break
+            refine_display = shrink_doc_values_for_budget(
+                refine_display, max(8_000, int(tot * 0.86))
+            )
         logger.info(
-            "Refinement round %d: addressing %d question(s), user prompt %d chars",
+            "Refinement round %d: addressing %d question(s), user prompt %d chars, max_tokens=%d",
             round_idx + 1,
             len(questions),
             len(refine_user),
+            refine_max_tokens,
         )
 
         resp_w = client.messages.create(
             model=model,
-            max_tokens=16000,
+            max_tokens=refine_max_tokens,
             system=writer_system,
             messages=[{"role": "user", "content": refine_user}],
         )
@@ -369,6 +435,259 @@ def run_review_refinement_loop(
         for e in refined:
             touched_paths.add(e.path)
         current_edits = draft_to_final_edits(existing_docs, draft)
+        round_idx += 1
+
+    return draft_to_final_edits(existing_docs, draft)
+
+
+EDIT_BASED_REVIEW_SYSTEM = """You review **proposed documentation edits** (already drafted) against a **PR change narrative**.
+
+You do **not** see the raw PR diff—only the narrative and, for each changed file, the **previous** target-branch snippet and the **proposed** replacement.
+
+Decide whether the set of edits is sufficient and accurate for public readers. If not, ask concrete, answerable questions.
+
+Output **only** JSON in a ```json code fence:
+{"status": "satisfied"}
+or
+{"status": "needs_revision", "questions": ["question 1", ...]}
+
+Use at most 6 questions."""
+
+PHASED_REFINE_WRITER_SYSTEM = """You revise MkDocs documentation in response to reviewer questions.
+You have the PR change narrative and current draft file(s). Output ```docnerd:path (exact repo-relative path)
+then the **full** new markdown file. You may change multiple files. Preserve voice and structure where sensible."""
+
+
+def _edit_reviewer_user_prompt(
+    narrative: str,
+    existing_docs: dict[str, str],
+    draft: dict[str, str],
+    changed_paths: list[str],
+    *,
+    max_after_chars: int = 12_000,
+    max_before_chars: int = 800,
+) -> str:
+    parts = [
+        "## PR change narrative",
+        narrative,
+        "",
+        "## Changed files (evaluate this set against the narrative)",
+        "",
+    ]
+    for p in changed_paths:
+        new_c = draft.get(p, "")
+        if len(new_c) > max_after_chars:
+            new_c = new_c[:max_after_chars] + "\n... (truncated)\n"
+        old_c = existing_docs.get(p, "")
+        if len(old_c) > max_before_chars:
+            old_c = old_c[:max_before_chars] + "\n... (truncated)\n"
+        parts.append(f"### `{p}`")
+        parts.append("**Previously (target branch):**")
+        parts.append("```markdown")
+        parts.append(old_c or "(empty / missing)")
+        parts.append("```")
+        parts.append("**Proposed:**")
+        parts.append("```markdown")
+        parts.append(new_c)
+        parts.append("```")
+        parts.append("")
+    parts.append("Respond with only the JSON object as instructed.")
+    return "\n".join(parts)
+
+
+def _build_phased_refine_user(
+    narrative: str,
+    questions: list[str],
+    draft: dict[str, str],
+    paths_to_include: set[str],
+    *,
+    max_chars: int = 14_000,
+) -> str:
+    q_lines = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
+    parts = [
+        "## PR change narrative",
+        narrative,
+        "",
+        "## Reviewer questions — address every point",
+        "",
+        q_lines,
+        "",
+        "## Current draft files",
+        "",
+    ]
+    for p in sorted(paths_to_include):
+        c = draft.get(p, "")
+        if len(c) > max_chars:
+            c = c[:max_chars] + "\n... (truncated)\n"
+        parts.append(f"### `{p}`")
+        parts.append("```markdown")
+        parts.append(c)
+        parts.append("```")
+        parts.append("")
+    parts.append(
+        "Output ```docnerd:path``` blocks with **complete** file content for each file you change."
+    )
+    return "\n".join(parts)
+
+
+def run_edit_based_review_loop(
+    client: Anthropic,
+    model: str,
+    pr_change_narrative: str,
+    pr_context: PRContext,
+    target_branch: str,
+    nav_structure: str,
+    existing_docs: dict[str, str],
+    existing_paths: set[str],
+    rules_text: str,
+    allow_new_files: bool,
+    initial_edits: list[DocEdit],
+    *,
+    all_doc_paths: list[str] | None = None,
+    max_wall_seconds: float = DEFAULT_MAX_WALL_SECONDS,
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
+) -> list[DocEdit]:
+    """
+    Reviewer/refine loop driven by **proposed edits** + PR narrative (phased pipeline).
+    """
+    if not initial_edits:
+        return initial_edits
+
+    logger.info(
+        "Edit-based review: PR #%s branch=%s allow_new=%s inventory_paths=%d",
+        pr_context.number,
+        target_branch,
+        allow_new_files,
+        len(all_doc_paths or ()),
+    )
+    logger.debug(
+        "Edit-based review context: nav_chars=%d rules_chars=%d",
+        len(nav_structure or ""),
+        len(rules_text or ""),
+    )
+
+    draft = apply_edits_to_draft(existing_docs, initial_edits)
+    preview_blocked = preview_only_paths(existing_docs)
+    touched_paths: set[str] = {e.path for e in initial_edits}
+
+    deadline = time.monotonic() + max_wall_seconds
+    round_idx = 0
+    while round_idx < max_rounds:
+        if time.monotonic() >= deadline:
+            logger.info("Edit-based review stopped: wall clock limit")
+            break
+
+        changed_paths = sorted(
+            p for p, c in draft.items() if p not in existing_docs or existing_docs[p] != c
+        )
+        if not changed_paths:
+            break
+
+        review_display = dict(draft)
+        review_user = ""
+        review_mt = REVIEWER_MAX_OUTPUT
+        for _rv in range(25):
+            review_user = _edit_reviewer_user_prompt(
+                pr_change_narrative, existing_docs, review_display, changed_paths
+            )
+            review_mt = compute_max_output_tokens(
+                EDIT_BASED_REVIEW_SYSTEM,
+                review_user,
+                desired_max=REVIEWER_MAX_OUTPUT,
+            )
+            if review_mt >= MIN_OUTPUT_TOKENS:
+                break
+            tot = sum(len(review_display.get(p, "")) for p in changed_paths)
+            if tot < 4_000:
+                break
+            review_display = shrink_doc_values_for_budget(
+                review_display, max(4_000, int(tot * 0.86))
+            )
+
+        logger.info(
+            "Edit-based reviewer round %d: user=%d chars max_tokens=%d files=%s",
+            round_idx + 1,
+            len(review_user),
+            review_mt,
+            changed_paths,
+        )
+
+        resp = client.messages.create(
+            model=model,
+            max_tokens=review_mt,
+            system=EDIT_BASED_REVIEW_SYSTEM,
+            messages=[{"role": "user", "content": review_user}],
+        )
+        review_text = ""
+        for block in resp.content:
+            if hasattr(block, "text"):
+                review_text += block.text
+
+        satisfied, questions, _ = parse_reviewer_response(review_text)
+        if satisfied:
+            logger.info("Edit-based reviewer satisfied after round %d", round_idx + 1)
+            break
+
+        if not questions:
+            logger.info("Edit-based reviewer needs_revision but no questions; stopping")
+            break
+
+        if time.monotonic() >= deadline:
+            break
+
+        refine_display = dict(draft)
+        refine_user = ""
+        refine_mt = WRITER_MAX_OUTPUT
+        for _rf in range(25):
+            refine_user = _build_phased_refine_user(
+                pr_change_narrative,
+                questions,
+                refine_display,
+                touched_paths,
+            )
+            refine_mt = compute_max_output_tokens(
+                PHASED_REFINE_WRITER_SYSTEM,
+                refine_user,
+                desired_max=WRITER_MAX_OUTPUT,
+            )
+            if refine_mt >= MIN_OUTPUT_TOKENS:
+                break
+            tot = sum(len(v) for v in refine_display.values())
+            if tot < 8_000:
+                break
+            refine_display = shrink_doc_values_for_budget(
+                refine_display, max(8_000, int(tot * 0.86))
+            )
+
+        logger.info(
+            "Edit-based refine round %d: questions=%d user=%d chars max_tokens=%d",
+            round_idx + 1,
+            len(questions),
+            len(refine_user),
+            refine_mt,
+        )
+
+        resp_w = client.messages.create(
+            model=model,
+            max_tokens=refine_mt,
+            system=PHASED_REFINE_WRITER_SYSTEM,
+            messages=[{"role": "user", "content": refine_user}],
+        )
+        writer_text = ""
+        for block in resp_w.content:
+            if hasattr(block, "text"):
+                writer_text += block.text
+
+        refined = filter_edits_not_preview_only(
+            parse_docnerd_response(writer_text, existing_paths), preview_blocked
+        )
+        if not refined:
+            logger.warning("Edit-based refine produced no docnerd blocks; stopping")
+            break
+
+        draft = apply_edits_to_draft(draft, refined)
+        for e in refined:
+            touched_paths.add(e.path)
         round_idx += 1
 
     return draft_to_final_edits(existing_docs, draft)
