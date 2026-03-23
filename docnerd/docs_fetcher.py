@@ -176,16 +176,43 @@ def fetch_doc_contents_for_paths(
     """
     Load full text for each path (for per-file doc passes). Skips missing/empty files.
     """
-    out: dict[str, str] = {}
+    meta = fetch_doc_contents_and_shas_for_paths(
+        repo, ref, paths, max_chars_per_file=max_chars_per_file
+    )
+    return {p: t[0] for p, t in meta.items()}
+
+
+def fetch_doc_contents_and_shas_for_paths(
+    repo: Repository,
+    ref: str,
+    paths: list[str],
+    *,
+    max_chars_per_file: int = 80_000,
+) -> dict[str, tuple[str, str]]:
+    """
+    Load full text and Git blob SHA for each path (for phased mode + DOCNERD_CACHE invalidation).
+    Returns path -> (content, sha). Skips missing files.
+    """
+    out: dict[str, tuple[str, str]] = {}
     for path in paths:
-        content = _get_file_content(repo, path, ref)
-        if not content:
+        try:
+            c = repo.get_contents(path, ref=ref)
+            if getattr(c, "type", "") != "file":
+                continue
+            sha = getattr(c, "sha", "") or ""
+            raw = ""
+            if c.content:
+                raw = base64.b64decode(c.content).decode("utf-8", errors="replace")
+            if not raw:
+                continue
+            if len(raw) > max_chars_per_file:
+                raw = (
+                    raw[:max_chars_per_file]
+                    + "\n\n... (truncated)\n"
+                    + _PREVIEW_ONLY_TAIL
+                )
+            if sha:
+                out[path] = (raw, sha)
+        except Exception:
             continue
-        if len(content) > max_chars_per_file:
-            content = (
-                content[:max_chars_per_file]
-                + "\n\n... (truncated)\n"
-                + _PREVIEW_ONLY_TAIL
-            )
-        out[path] = content
     return out

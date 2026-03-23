@@ -47,14 +47,25 @@ docs_fetcher:
 doc_generation:
   mode: phased   # or legacy
   phased:
-    max_parallel_doc_calls: 4
+    # Use 1 unless your Anthropic tier allows more concurrent connections (else 429).
+    max_parallel_doc_calls: 1
+    delay_seconds_between_doc_calls: 0   # optional throttle between docs when parallel is 1
+    api_max_retries: 8
+    api_retry_base_delay_seconds: 2.5
     per_doc_max_content_chars: 80000
     narrative_max_tokens: 8192
     adequacy_max_tokens: 4096
     expansion_max_tokens: 24000
+    docnerd_cache:
+      enabled: true
+      path: DOCNERD_CACHE.yml
+      use_description_gate: true
+      check_commit_after_description: false
 ```
 
 - **`docs_fetcher`** — Lists **all** `.md` paths. In **legacy** mode, priority/secondary tiers cap how much body text loads into the monolithic prompt. In **phased** mode, paths drive the per-file loop; bodies are loaded separately up to `per_doc_max_content_chars`.
+
+- **`doc_generation.phased.docnerd_cache`** — Maintains **`DOCNERD_CACHE.yml`** at the **docs repo root** (committed in docNerd PRs). Each markdown path has a **short Claude-written summary**, **`content_sha`** (Git blob on the target branch), and timestamps. When the blob SHA changes, the summary is refreshed. A **gate** step (PR narrative + cached summary → `PROCEED` or `SKIP`) avoids the expensive full-file edit call for clearly unrelated pages. Set `enabled: false` to disable cache + gate. With `allow_new_files: false`, creating **`DOCNERD_CACHE.yml`** the first time is still allowed.
 
 - **`allow_new_files`** — When `false`, docNerd will only edit existing files. Any new-file suggestions from Claude are filtered out. Default: `true`.
 

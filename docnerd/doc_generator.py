@@ -534,6 +534,8 @@ class DocGenerator:
         generation_mode: str = "phased",
         full_document_map: dict[str, str] | None = None,
         phased_settings: dict | None = None,
+        target_repo: Any | None = None,
+        document_shas: dict[str, str] | None = None,
     ) -> list[DocEdit]:
         """
         Generate documentation edits based on PR context.
@@ -547,6 +549,8 @@ class DocGenerator:
             generation_mode: ``phased`` (default) or ``legacy`` (single monolithic Claude call)
             full_document_map: For ``phased``: full body for every .md file to scan (from target branch)
             phased_settings: Optional ``doc_generation.phased`` config dict
+            target_repo: PyGithub ``Repository`` for the docs repo (``DOCNERD_CACHE.yml`` sync)
+            document_shas: For ``phased``: path -> Git blob SHA from the target branch
 
         Returns:
             List of DocEdit (path, content, is_new)
@@ -578,6 +582,8 @@ class DocGenerator:
                 allow_new_files,
                 review_loop,
                 phased_settings,
+                target_repo=target_repo,
+                document_shas=document_shas or {},
             )
 
         logger.warning(

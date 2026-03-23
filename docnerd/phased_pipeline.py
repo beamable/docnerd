@@ -6,6 +6,7 @@ import concurrent.futures
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,26 @@ from anthropic import Anthropic
 
 from docnerd.analyzer import PRContext, format_pr_context_for_prompt
 from docnerd.doc_generator import DocEdit, parse_docnerd_response, preview_only_paths
-from docnerd.llm_context import compute_max_output_tokens
+from docnerd.docnerd_cache import (
+    DEFAULT_CACHE_PATH,
+    cache_file_exists_on_branch,
+    doc_edit_for_cache_file,
+    dump_cache_yaml,
+    gate_should_run_full_edit,
+    sync_docnerd_cache,
+)
+from docnerd.llm_context import (
+    API_DEFAULT_MAX_RETRIES,
+    API_DEFAULT_RETRY_BASE_DELAY_S,
+    compute_max_output_tokens,
+    messages_create_with_retry,
+)
 
 logger = logging.getLogger("docnerd.phased_pipeline")
+
+DEFAULT_API_MAX_RETRIES = API_DEFAULT_MAX_RETRIES
+DEFAULT_API_RETRY_BASE_DELAY_S = API_DEFAULT_RETRY_BASE_DELAY_S
+
 
 ADEQUACY_SYSTEM = """You judge whether **proposed documentation edits** (summarized below) adequately cover a **PR change narrative** for public readers.
 
@@ -42,6 +60,8 @@ def write_pr_narrative_markdown(
     *,
     max_tokens: int = 8192,
     workdir: Path | None = None,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
+    api_retry_base_delay_s: float = DEFAULT_API_RETRY_BASE_DELAY_S,
 ) -> str:
     """Claude writes a standalone PR change document (local handoff artifact)."""
     pr_text = format_pr_context_for_prompt(pr_context)
@@ -56,7 +76,10 @@ def write_pr_narrative_markdown(
     )
     user = "## Pull request\n\n" + pr_text
     mt = compute_max_output_tokens(system, user, desired_max=max_tokens)
-    resp = client.messages.create(
+    resp = messages_create_with_retry(
+        client,
+        max_retries=api_max_retries,
+        base_delay_s=api_retry_base_delay_s,
         model=model,
         max_tokens=max(1024, mt),
         system=system,
@@ -97,6 +120,8 @@ def suggest_one_doc(
     allow_new_files: bool,
     *,
     max_tokens: int = 16_384,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
+    api_retry_base_delay_s: float = DEFAULT_API_RETRY_BASE_DELAY_S,
 ) -> DocEdit | None:
     system = (
         f"You maintain **one** documentation file: `{doc_path}`.\n"
@@ -117,7 +142,10 @@ def suggest_one_doc(
         + "\n```\n"
     )
     mt = compute_max_output_tokens(system, user, desired_max=max_tokens)
-    resp = client.messages.create(
+    resp = messages_create_with_retry(
+        client,
+        max_retries=api_max_retries,
+        base_delay_s=api_retry_base_delay_s,
         model=model,
         max_tokens=max(1024, mt),
         system=system,
@@ -136,16 +164,41 @@ def run_per_doc_pass_parallel(
     rules_text: str,
     allow_new_files: bool,
     *,
-    max_workers: int = 4,
+    max_workers: int = 1,
+    delay_between_calls_s: float = 0.0,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
+    api_retry_base_delay_s: float = DEFAULT_API_RETRY_BASE_DELAY_S,
+    path_descriptions: dict[str, str] | None = None,
+    use_description_gate: bool = False,
+    gate_max_tokens: int = 256,
 ) -> list[DocEdit]:
     existing_paths = set(full_docs.keys())
     excerpt = rules_text[:8000]
+    desc_map = path_descriptions or {}
 
     def job(path: str) -> DocEdit | None:
         content = full_docs.get(path, "")
         if not content:
             return None
         try:
+            if use_description_gate:
+                d = desc_map.get(path, "").strip()
+                if d:
+                    try:
+                        if not gate_should_run_full_edit(
+                            client,
+                            model,
+                            narrative,
+                            path,
+                            d,
+                            max_tokens=gate_max_tokens,
+                            api_max_retries=api_max_retries,
+                            api_retry_base_delay_s=api_retry_base_delay_s,
+                        ):
+                            logger.info("Description gate: skip full edit for %s", path)
+                            return None
+                    except Exception:
+                        logger.exception("Description gate failed for %s; running full edit", path)
             return suggest_one_doc(
                 client,
                 model,
@@ -155,13 +208,19 @@ def run_per_doc_pass_parallel(
                 excerpt,
                 existing_paths,
                 allow_new_files,
+                api_max_retries=api_max_retries,
+                api_retry_base_delay_s=api_retry_base_delay_s,
             )
         except Exception:
             logger.exception("Per-doc Claude call failed for %s", path)
             return None
 
     if max_workers <= 1:
-        merged = [job(p) for p in ordered_paths]
+        merged = []
+        for i, p in enumerate(ordered_paths):
+            if i > 0 and delay_between_calls_s > 0:
+                time.sleep(delay_between_calls_s)
+            merged.append(job(p))
     else:
         path_result: dict[str, DocEdit | None] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -189,6 +248,8 @@ def evaluate_adequacy(
     edits: list[DocEdit],
     *,
     max_tokens: int = 4096,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
+    api_retry_base_delay_s: float = DEFAULT_API_RETRY_BASE_DELAY_S,
 ) -> tuple[bool, dict[str, Any]]:
     if not edits:
         return False, {"gap": "No edits proposed", "actions": []}
@@ -203,7 +264,10 @@ def evaluate_adequacy(
         + "\n".join(summaries)
     )
     mt = compute_max_output_tokens(ADEQUACY_SYSTEM, user, desired_max=max_tokens)
-    resp = client.messages.create(
+    resp = messages_create_with_retry(
+        client,
+        max_retries=api_max_retries,
+        base_delay_s=api_retry_base_delay_s,
         model=model,
         max_tokens=max(1024, mt),
         system=ADEQUACY_SYSTEM,
@@ -233,6 +297,8 @@ def run_expansion_call(
     existing_paths: set[str],
     *,
     max_tokens: int = 24_000,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
+    api_retry_base_delay_s: float = DEFAULT_API_RETRY_BASE_DELAY_S,
 ) -> list[DocEdit]:
     preview = ", ".join(all_paths[:50])
     if len(all_paths) > 50:
@@ -254,7 +320,10 @@ def run_expansion_call(
         + "\n```\n"
     )
     mt = compute_max_output_tokens(system, user, desired_max=max_tokens)
-    resp = client.messages.create(
+    resp = messages_create_with_retry(
+        client,
+        max_retries=api_max_retries,
+        base_delay_s=api_retry_base_delay_s,
         model=model,
         max_tokens=max(1024, mt),
         system=system,
@@ -276,6 +345,9 @@ def run_phased_generation(
     allow_new_files: bool,
     review_loop_cfg: dict[str, Any] | None,
     phased_cfg: dict[str, Any] | None,
+    *,
+    target_repo: Any | None = None,
+    document_shas: dict[str, str] | None = None,
 ) -> list[DocEdit]:
     """
     Full phased pipeline + edit-based review loop (when enabled).
@@ -283,10 +355,54 @@ def run_phased_generation(
     phased_cfg = phased_cfg or {}
     review_loop_cfg = review_loop_cfg or {}
 
+    api_retries = int(phased_cfg.get("api_max_retries", DEFAULT_API_MAX_RETRIES))
+    api_delay = float(
+        phased_cfg.get("api_retry_base_delay_seconds", DEFAULT_API_RETRY_BASE_DELAY_S)
+    )
+
     paths = sorted(all_doc_paths) if all_doc_paths else sorted(full_docs.keys())
     if not paths:
         logger.warning("Phased generation: no doc paths; returning no edits")
         return []
+
+    document_shas = document_shas or {}
+    cache_cfg = phased_cfg.get("docnerd_cache") or {}
+    cache_enabled = bool(cache_cfg.get("enabled", True))
+    cache_path = str(cache_cfg.get("path", DEFAULT_CACHE_PATH))
+    cache_data: dict[str, Any] | None = None
+    path_descriptions: dict[str, str] = {}
+    cache_dirty = False
+
+    if cache_enabled and target_repo is not None:
+        try:
+            cache_data, path_descriptions, cache_dirty = sync_docnerd_cache(
+                target_repo,
+                target_branch,
+                paths,
+                full_docs,
+                document_shas,
+                client,
+                model,
+                cache_path=cache_path,
+                max_chars_for_describe=int(cache_cfg.get("max_chars_for_describe", 48_000)),
+                describe_max_tokens=int(cache_cfg.get("describe_max_tokens", 2048)),
+                delay_between_calls_s=float(cache_cfg.get("delay_seconds_between_cache_calls", 0) or 0),
+                check_commit_after_description=bool(
+                    cache_cfg.get("check_commit_after_description", False)
+                ),
+                api_max_retries=api_retries,
+                api_retry_base_delay_s=api_delay,
+            )
+            logger.info(
+                "DOCNERD_CACHE: %d path description(s), dirty=%s",
+                len(path_descriptions),
+                cache_dirty,
+            )
+        except Exception:
+            logger.exception("DOCNERD_CACHE sync failed; continuing without cache gate")
+            path_descriptions = {}
+            cache_data = None
+            cache_dirty = False
 
     narrative = write_pr_narrative_markdown(
         client,
@@ -294,9 +410,19 @@ def run_phased_generation(
         pr_context,
         rules_text,
         max_tokens=int(phased_cfg.get("narrative_max_tokens", 8192)),
+        api_max_retries=api_retries,
+        api_retry_base_delay_s=api_delay,
     )
 
-    parallel = max(1, int(phased_cfg.get("max_parallel_doc_calls", 4)))
+    use_description_gate = cache_enabled and bool(
+        cache_cfg.get("use_description_gate", True)
+    )
+    if use_description_gate and not path_descriptions:
+        use_description_gate = False
+
+    # Default 1: Anthropic often limits concurrent connections; parallel >1 causes 429s for many accounts.
+    parallel = max(1, int(phased_cfg.get("max_parallel_doc_calls", 1)))
+    delay_between = float(phased_cfg.get("delay_seconds_between_doc_calls", 0) or 0)
     edits = run_per_doc_pass_parallel(
         client,
         model,
@@ -306,6 +432,12 @@ def run_phased_generation(
         rules_text,
         allow_new_files,
         max_workers=parallel,
+        delay_between_calls_s=delay_between,
+        api_max_retries=api_retries,
+        api_retry_base_delay_s=api_delay,
+        path_descriptions=path_descriptions,
+        use_description_gate=use_description_gate,
+        gate_max_tokens=int(cache_cfg.get("gate_max_tokens", 256)),
     )
 
     preview_blocked = preview_only_paths(full_docs)
@@ -319,6 +451,8 @@ def run_phased_generation(
         narrative,
         edits,
         max_tokens=int(phased_cfg.get("adequacy_max_tokens", 4096)),
+        api_max_retries=api_retries,
+        api_retry_base_delay_s=api_delay,
     )
     if not adequate:
         logger.info("Adequacy check not satisfied; running expansion pass")
@@ -333,6 +467,8 @@ def run_phased_generation(
             allow_new_files,
             set(full_docs.keys()),
             max_tokens=int(phased_cfg.get("expansion_max_tokens", 24_000)),
+            api_max_retries=api_retries,
+            api_retry_base_delay_s=api_delay,
         )
         more = [e for e in more if e.path not in preview_blocked]
         edits = dedupe_edits(edits + more)
@@ -357,6 +493,24 @@ def run_phased_generation(
             max_wall_seconds=float(review_loop_cfg.get("max_wall_seconds", 600)),
             max_rounds=int(review_loop_cfg.get("max_rounds", 5)),
         )
+
+    if cache_enabled and cache_dirty and cache_data is not None:
+        try:
+            if target_repo is not None:
+                exists = cache_file_exists_on_branch(target_repo, target_branch, cache_path)
+            else:
+                exists = False
+            yml = dump_cache_yaml(cache_data)
+            edits.append(
+                doc_edit_for_cache_file(
+                    yml,
+                    cache_path,
+                    cache_exists_on_branch=exists,
+                )
+            )
+            logger.info("Appended %s to edits (cache updated)", cache_path)
+        except Exception:
+            logger.exception("Failed to append DOCNERD_CACHE edit")
 
     logger.info("Phased generation finished: %d final edit(s) for branch %s", len(edits), target_branch)
     return edits

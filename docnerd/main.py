@@ -10,7 +10,7 @@ from docnerd.branch_validator import validate_branch
 from docnerd.comment_parser import mentions_docnerd, parse_trigger
 from docnerd.config import load_config
 from docnerd.doc_generator import DocGenerator
-from docnerd.docs_fetcher import fetch_doc_contents_for_paths, fetch_existing_docs
+from docnerd.docs_fetcher import fetch_doc_contents_and_shas_for_paths, fetch_existing_docs
 from docnerd.github_client import get_github_client, get_pr, get_repo, post_comment
 from docnerd.pr_creator import create_docs_pr, find_existing_docs_pr
 
@@ -182,16 +182,19 @@ def run(
     generation_mode = doc_generation_cfg.get("mode", "phased")
     phased_cfg = doc_generation_cfg.get("phased", {})
     full_document_map: dict[str, str] | None = None
+    document_shas: dict[str, str] = {}
     if generation_mode == "phased" and all_doc_paths:
         try:
-            full_document_map = fetch_doc_contents_for_paths(
+            meta = fetch_doc_contents_and_shas_for_paths(
                 target_repo,
                 target_branch,
                 all_doc_paths,
                 max_chars_per_file=int(phased_cfg.get("per_doc_max_content_chars", 80_000)),
             )
+            full_document_map = {k: v[0] for k, v in meta.items()}
+            document_shas = {k: v[1] for k, v in meta.items()}
             logger.info(
-                "Phased mode: loaded full text for %d / %d markdown path(s)",
+                "Phased mode: loaded full text + SHA for %d / %d markdown path(s)",
                 len(full_document_map),
                 len(all_doc_paths),
             )
@@ -216,6 +219,8 @@ def run(
             generation_mode=generation_mode,
             full_document_map=full_document_map,
             phased_settings=phased_cfg,
+            target_repo=target_repo if generation_mode == "phased" else None,
+            document_shas=document_shas if generation_mode == "phased" else None,
         )
     except Exception as e:
         logger.exception("Doc generation failed")
@@ -239,8 +244,9 @@ def run(
         return 0
 
     # Optionally filter out new files (config: allow_new_files: false)
+    cache_yaml_path = str((phased_cfg.get("docnerd_cache") or {}).get("path", "DOCNERD_CACHE.yml"))
     if not allow_new:
-        edits = [e for e in edits if not e.is_new]
+        edits = [e for e in edits if (not e.is_new) or e.path == cache_yaml_path]
         if not edits:
             _comment(pr, "I found potential doc updates but they would require new files. With allow_new_files disabled, no changes were made.")
             return 0

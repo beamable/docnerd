@@ -49,8 +49,24 @@ allow_new_files: true
 doc_generation:
   mode: phased
   phased:
-    max_parallel_doc_calls: 4
+    # Keep at 1 unless Anthropic has raised your concurrent-connection limit (429 otherwise).
+    max_parallel_doc_calls: 1
+    # Optional throttle between per-doc calls when max_parallel_doc_calls is 1
+    # delay_seconds_between_doc_calls: 0.5
     per_doc_max_content_chars: 80000
+    api_max_retries: 8
+    api_retry_base_delay_seconds: 2.5
+    # DOCNERD_CACHE.yml: per-page summaries + blob SHA; gate skips unlikely pages before full edit
+    docnerd_cache:
+      enabled: true
+      path: DOCNERD_CACHE.yml
+      use_description_gate: true
+      gate_max_tokens: 256
+      describe_max_tokens: 2048
+      max_chars_for_describe: 48000
+      delay_seconds_between_cache_calls: 0
+      # Extra GitHub API + stricter invalidation (usually unnecessary; content_sha suffices)
+      check_commit_after_description: false
     narrative_max_tokens: 8192
     adequacy_max_tokens: 4096
     expansion_max_tokens: 24000

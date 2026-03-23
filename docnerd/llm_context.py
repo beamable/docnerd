@@ -3,10 +3,57 @@
 from __future__ import annotations
 
 import logging
+import time
+from typing import Any
+
+from anthropic import Anthropic, RateLimitError
 
 from docnerd.docs_fetcher import DOCS_PREVIEW_ONLY_SENTINEL
 
 logger = logging.getLogger("docnerd.llm_context")
+
+API_DEFAULT_MAX_RETRIES = 8
+API_DEFAULT_RETRY_BASE_DELAY_S = 2.5
+
+
+def _is_retryable_api_error(exc: BaseException) -> bool:
+    if isinstance(exc, RateLimitError):
+        return True
+    code = getattr(exc, "status_code", None)
+    if code in (429, 503, 529):
+        return True
+    return False
+
+
+def messages_create_with_retry(
+    client: Anthropic,
+    *,
+    max_retries: int = API_DEFAULT_MAX_RETRIES,
+    base_delay_s: float = API_DEFAULT_RETRY_BASE_DELAY_S,
+    **kwargs: Any,
+) -> Any:
+    """Call client.messages.create with exponential backoff on rate limits."""
+    last: BaseException | None = None
+    attempts = max(1, max_retries)
+    for attempt in range(attempts):
+        try:
+            return client.messages.create(**kwargs)
+        except Exception as e:
+            last = e
+            if attempt + 1 >= attempts or not _is_retryable_api_error(e):
+                raise
+            delay = min(base_delay_s * (2**attempt) + 0.2 * attempt, 120.0)
+            logger.warning(
+                "Anthropic %s (attempt %d/%d); retrying in %.1fs — %s",
+                type(e).__name__,
+                attempt + 1,
+                attempts,
+                delay,
+                str(e)[:200],
+            )
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 # Pessimistic estimate so we shrink / lower max_tokens before the API returns 400.
 # (Anthropic counts can be higher than len/4 for some content.)
