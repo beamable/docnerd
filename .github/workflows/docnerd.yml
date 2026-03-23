@@ -1,4 +1,4 @@
-# docNerd: Triggered by @docNerd, doc for <branch> comments on PRs
+# docNerd: Triggered by "docNerd, doc for <branch>" (no @ — avoids pinging github.com/docNerd)
 # Add this workflow to your SOURCE repo. Configure the secrets below.
 # When using from another repo, change uses: ./ to uses: beamable/docnerd@v1
 name: docNerd
@@ -9,7 +9,7 @@ on:
 
 jobs:
   docnerd:
-    if: github.event.issue.pull_request != null && (contains(github.event.comment.body, '@docNerd') || contains(github.event.comment.body, '@docnerd'))
+    if: github.event.issue.pull_request != null && contains(toLower(github.event.comment.body), 'docnerd,')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -4,7 +4,7 @@
 
 ### 1.1 Purpose
 
-docNerd is a system that monitors pull requests (PRs) in a **source repository** and creates corresponding documentation PRs in a **target documentation repository** when invoked via comment. A user comments on a source PR (e.g., `@docNerd, doc for core/v7.1`) to request documentation; docNerd uses Claude to generate or update docs, then opens a PR on the specified branch in the docs repo and replies with the link.
+docNerd is a system that monitors pull requests (PRs) in a **source repository** and creates corresponding documentation PRs in a **target documentation repository** when invoked via comment. A user comments on a source PR (e.g., `docNerd, doc for core/v7.1`, without `@` to avoid pinging the GitHub user docNerd) to request documentation; docNerd uses Claude to generate or update docs, then opens a PR on the specified branch in the docs repo and replies with the link.
 
 ### 1.2 Goals
 
@@ -19,7 +19,7 @@ docNerd is a system that monitors pull requests (PRs) in a **source repository**
 
 ### 2.1 In Scope
 
-- Detecting comment triggers on source PRs (e.g., `@docNerd, doc for &lt;branch&gt;`)
+- Detecting comment triggers on source PRs (e.g., `docNerd, doc for &lt;branch&gt;`)
 - Validating that the requested docs branch exists in the target repository
 - Analyzing PR content (files changed, commit messages, descriptions) to determine documentation impact
 - Generating and **editing** documentation using Claude (LLM), guided by user-defined rules
@@ -40,19 +40,19 @@ docNerd is a system that monitors pull requests (PRs) in a **source repository**
 
 ### 3.1 Invocation
 
-A user invokes docNerd by commenting on a source PR with a mention and branch specification:
+A user invokes docNerd by commenting on a source PR with the trigger phrase and branch specification (no leading `@`, so GitHub does not notify the unrelated user account docNerd):
 
 ```
-@docNerd, doc for core/v7.1
+docNerd, doc for core/v7.1
 ```
 
-The format is: `@docNerd, doc for <branch>`, where `<branch>` is the target branch in the docs repository (e.g., a Mike version branch like `core/v7.1`).
+The format is: `docNerd, doc for <branch>`, where `<branch>` is the target branch in the docs repository (e.g., a Mike version branch like `core/v7.1`).
 
 ### 3.2 Response Flow
 
 | Step | Action | docNerd Response |
 |------|--------|------------------|
-| 1 | User comments `@docNerd, doc for &lt;branch&gt;` | — |
+| 1 | User comments `docNerd, doc for &lt;branch&gt;` | — |
 | 2 | docNerd validates that `<branch>` exists in the docs repo | **If branch not found**: Reply with *"I couldn't find that branch"* |
 | 3 | docNerd accepts the request | Reply with *"yes, working on it"* |
 | 4 | docNerd analyzes PR, uses Claude to generate/update docs, opens docs PR | — |
@@ -72,7 +72,7 @@ The format is: `@docNerd, doc for <branch>`, where `<branch>` is the target bran
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-1 | System must connect to a configurable source repository (e.g., GitHub) | Must |
-| FR-2 | System must detect comments on PRs that mention docNerd with the trigger phrase | Must |
+| FR-2 | System must detect comments on PRs that use the docNerd trigger phrase (plain text, not `@docNerd`) | Must |
 | FR-3 | System must parse the comment to extract the target docs branch (e.g., `core/v7.1`) | Must |
 | FR-4 | System must extract PR metadata: title, description, files changed, commits, labels | Must |
 | FR-5 | System must post replies as comments on the source PR | Must |
@@ -207,8 +207,8 @@ The user must have **full control** over how documentation is written. The syste
 ```
 ┌─────────────────┐     ┌──────────────────────────────────────────┐     ┌─────────────────┐
 │  Source Repo    │     │  docNerd                                  │     │  Target Docs    │
-│  (PR + comment  │────▶│  - Comment Watcher (detect @docNerd)       │────▶│  Repo           │
-│   @docNerd)     │     │  - Branch Validator (check docs repo)      │     │  (MkDocs+Mike)  │
+│  (PR + comment  │────▶│  - Comment Watcher (detect docNerd)        │────▶│  Repo           │
+│   docNerd)      │     │  - Branch Validator (check docs repo)      │     │  (MkDocs+Mike)  │
 │                 │◀────│  - Analyzer (PR diff, metadata)            │     │  (Doc PRs on    │
 │  (reply: link)  │     │  - Claude (LLM doc generation/editing)    │     │   version       │
 └─────────────────┘     │  - Rules Engine (user rules → prompt)     │     │   branches)     │
@@ -218,7 +218,7 @@ The user must have **full control** over how documentation is written. The syste
 
 ### 7.1 Components
 
-1. **Comment Watcher**: Detects `@docNerd, doc for <branch>` comments on source PRs
+1. **Comment Watcher**: Detects `docNerd, doc for <branch>` comments on source PRs
 2. **Branch Validator**: Verifies the requested branch exists in the docs repo
 3. **Analyzer**: Parses PR content, determines docs relevance, extracts topics
 4. **Claude (LLM)**: Generates new docs and edits existing docs, guided by rules
@@ -238,7 +238,7 @@ The user must have **full control** over how documentation is written. The syste
 
 ### 8.2 Optional Configuration
 
-- Comment trigger phrase (default: `@docNerd, doc for`)
+- Comment trigger phrase (default: `docNerd, doc for`)
 - Branch naming convention for docNerd's working branches (e.g., `docnerd/<source-pr-number>-<branch>`)
 - Mapping: source repo paths → target doc paths
 - Claude model variant (e.g., claude-3-5-sonnet)
@@ -248,7 +248,7 @@ The user must have **full control** over how documentation is written. The syste
 ## 9. Open Questions
 
 1. **Comment detection**: Webhook on issue/PR comments, or polling for new comments?
-2. **Duplicate handling**: If user comments `@docNerd, doc for core/v7.1` twice, should docNerd update the existing docs PR or create a new one?
+2. **Duplicate handling**: If user comments `docNerd, doc for core/v7.1` twice, should docNerd update the existing docs PR or create a new one?
 3. **Conflict handling**: If target branch has changed since docNerd branched, how to handle merge conflicts?
 4. **Review workflow**: Should docs PRs be draft by default, or ready for review?
 5. **MkDocs structure**: Does docNerd need to understand mkdocs.yml / nav structure to place new pages correctly?
@@ -257,7 +257,7 @@ The user must have **full control** over how documentation is written. The syste
 
 ## 10. Success Criteria
 
-- [ ] Detects `@docNerd, doc for <branch>` comments on source PRs
+- [ ] Detects `docNerd, doc for <branch>` comments on source PRs
 - [ ] Validates requested branch exists in docs repo; replies "I couldn't find that branch" when not found
 - [ ] Replies "yes, working on it" when request is accepted
 - [ ] Uses Claude to generate and edit docs according to user-defined rules

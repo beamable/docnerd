@@ -1,6 +1,6 @@
 # docNerd Secrets Setup Guide
 
-This guide walks you through obtaining and configuring every secret and variable docNerd needs to run. All secrets are configured in your **source repository** (the repo where PRs are opened and where you comment `@docNerd, doc for <branch>`).
+This guide walks you through obtaining and configuring every secret and variable docNerd needs to run. All secrets are configured in your **source repository** (the repo where PRs are opened and where you comment `docNerd, doc for <branch>` — without `@`, to avoid pinging the GitHub user docNerd).
 
 ---
 
@@ -211,7 +211,7 @@ Your workflow should pass the secrets to the action:
 ### Workflow runs but docNerd doesn't respond
 
 - The comment may not match the trigger.
-- Fix: Use exactly `@docNerd, doc for <branch>` (e.g. `@docNerd, doc for core/v7.1`).
+- Fix: Use exactly `docNerd, doc for <branch>` (e.g. `docNerd, doc for core/v7.1`). Do not prefix with `@` (that notifies github.com/docNerd).
 
 ---
 

@@ -1,10 +1,10 @@
 # docNerd
 
-Generate documentation PRs from source PR comments using Claude. Comment `@docNerd, doc for core/v7.1` on a PR and docNerd uses Claude to generate or update docs, then opens a PR on the specified branch in your MkDocs + Mike docs repository.
+Generate documentation PRs from source PR comments using Claude. Comment `docNerd, doc for core/v7.1` on a PR (no `@` — that would ping the GitHub user [docNerd](https://github.com/docNerd)) and docNerd uses Claude to generate or update docs, then opens a PR on the specified branch in your MkDocs + Mike docs repository.
 
 ## How It Works
 
-1. You comment on a source PR: `@docNerd, doc for core/v7.1`
+1. You comment on a source PR: `docNerd, doc for core/v7.1`
 2. docNerd validates the branch exists in the docs repo
 3. docNerd replies "yes, working on it" or "I couldn't find that branch"
 4. Claude analyzes the PR and generates/edits documentation
@@ -26,7 +26,7 @@ on:
 
 jobs:
   docnerd:
-    if: github.event.issue.pull_request != null && contains(github.event.comment.body, '@docNerd')
+    if: github.event.issue.pull_request != null && contains(toLower(github.event.comment.body), 'docnerd,')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +70,7 @@ Add to your source repo root:
 ## Usage
 
 1. Open a PR in your source repo
-2. Comment: `@docNerd, doc for core/v7.1` (use your Mike version branch name)
+2. Comment: `docNerd, doc for core/v7.1` (use your Mike version branch name; do not use `@docNerd` — it mentions a real user)
 3. docNerd validates the branch, generates docs, and opens a PR in your docs repo
 
 ## Action inputs

@@ -23,7 +23,7 @@ llm:
 rules_path: rules
 
 # Comment trigger
-trigger_phrase: "@docNerd, doc for"
+trigger_phrase: "docNerd, doc for"
 
 # Branch naming for docNerd's working branches
 branch_prefix: docnerd

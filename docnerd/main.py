@@ -49,7 +49,7 @@ def run(
         0 on success, 1 on failure
     """
     config = load_config(config_path)
-    trigger_phrase = config.get("trigger_phrase", "@docNerd, doc for")
+    trigger_phrase = config.get("trigger_phrase", "docNerd, doc for")
 
     match = parse_trigger(comment_body, trigger_phrase)
     if not match.matched or not match.branch:
@@ -60,10 +60,10 @@ def run(
                 source_repo = get_repo(gh, source_owner, source_name)
                 pr = get_pr(source_repo, pr_number)
                 help_msg = (
-                    "I didn't understand that. Valid commands:\n\n"
-                    "- `@docNerd, doc for <branch>` — generate docs for the specified branch\n"
-                    "- `@docNerd, add docs to <branch>` — same as above\n\n"
-                    "Example: `@docNerd, doc for core/v7.1`"
+                    "I didn't understand that. Valid commands (no @ — avoids pinging a GitHub user):\n\n"
+                    "- `docNerd, doc for <branch>` — generate docs for the specified branch\n"
+                    "- `docNerd, add docs to <branch>` — same as above\n\n"
+                    "Example: `docNerd, doc for core/v7.1`"
                 )
                 _comment(pr, help_msg)
             else:

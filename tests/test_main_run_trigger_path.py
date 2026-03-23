@@ -15,7 +15,7 @@ from docnerd.analyzer import PRContext
 
 
 _MINIMAL_CONFIG = {
-    "trigger_phrase": "@docNerd, doc for",
+    "trigger_phrase": "docNerd, doc for",
     "branch_prefix": "docnerd",
     "source_repo": {"token": "fake-source-token"},
     "target_repo": {
@@ -91,7 +91,7 @@ def test_run_trigger_path_calls_fetch_and_extract_terms_without_error(
     from docnerd.main import run
 
     rc = run(
-        comment_body="@docNerd, doc for core/v7.1",
+        comment_body="docNerd, doc for core/v7.1",
         pr_number=1,
         source_owner="beamable",
         source_name="BeamableProduct",
